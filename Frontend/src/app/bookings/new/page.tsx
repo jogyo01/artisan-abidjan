@@ -4,6 +4,11 @@ import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import {
+  geolocationErrorMessage,
+  getBrowserCoordinates,
+  type GeoCoordinates,
+} from "@/lib/geolocation";
 
 type ArtisanSummary = {
   id: string;
@@ -49,6 +54,9 @@ function NewBookingForm() {
   const [address, setAddress] = useState("");
   const [description, setDescription] = useState("");
   const [scheduledAt, setScheduledAt] = useState("");
+  const [coordinates, setCoordinates] = useState<GeoCoordinates | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationError, setLocationError] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -213,6 +221,9 @@ function NewBookingForm() {
         address: trimmedAddress,
         description: trimmedDescription,
         scheduled_at: scheduledDate.toISOString(),
+        ...(coordinates
+          ? { latitude: coordinates.latitude, longitude: coordinates.longitude }
+          : {}),
       });
 
       if (error) {
@@ -225,6 +236,21 @@ function NewBookingForm() {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function handleUseLocation() {
+    setLocationError("");
+    setIsLocating(true);
+
+    try {
+      const nextCoordinates = await getBrowserCoordinates();
+      setCoordinates(nextCoordinates);
+    } catch (error) {
+      setCoordinates(null);
+      setLocationError(geolocationErrorMessage(error));
+    } finally {
+      setIsLocating(false);
     }
   }
 
@@ -326,6 +352,35 @@ function NewBookingForm() {
               placeholder="Quartier, rue, commune…"
             />
           </label>
+
+          <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+              Localisation de l&apos;intervention
+            </h2>
+            <p className="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">
+              Optionnel. L&apos;adresse texte reste obligatoire.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void handleUseLocation();
+              }}
+              disabled={isLocating}
+              className="mt-3 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            >
+              {isLocating ? "Récupération…" : "Utiliser ma position"}
+            </button>
+            {coordinates ? (
+              <p className="mt-3 text-sm font-normal text-zinc-800 dark:text-zinc-200">
+                Position récupérée
+              </p>
+            ) : null}
+            {locationError ? (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm font-normal text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                {locationError}
+              </p>
+            ) : null}
+          </section>
 
           <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
             Description du besoin

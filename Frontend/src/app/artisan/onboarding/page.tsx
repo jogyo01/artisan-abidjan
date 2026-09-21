@@ -3,6 +3,13 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import {
+  formatCoordinates,
+  geolocationErrorMessage,
+  getBrowserCoordinates,
+  isGeolocationPermissionDenied,
+  type GeoCoordinates,
+} from "@/lib/geolocation";
 
 type Category = {
   id: string;
@@ -35,6 +42,10 @@ export default function ArtisanOnboardingPage() {
   const [phone, setPhone] = useState("");
   const [isAvailable, setIsAvailable] = useState(true);
   const [categoryId, setCategoryId] = useState("");
+  const [coordinates, setCoordinates] = useState<GeoCoordinates | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationError, setLocationError] = useState("");
+  const [locationLaterMessage, setLocationLaterMessage] = useState("");
 
   useEffect(() => {
     let isMounted = true;
@@ -156,6 +167,9 @@ export default function ArtisanOnboardingPage() {
           city: trimmedCity,
           phone: trimmedPhone,
           is_available: isAvailable,
+          ...(coordinates
+            ? { latitude: coordinates.latitude, longitude: coordinates.longitude }
+            : {}),
         })
         .select("id")
         .single();
@@ -186,6 +200,25 @@ export default function ArtisanOnboardingPage() {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleUseLocation() {
+    setLocationError("");
+    setLocationLaterMessage("");
+    setIsLocating(true);
+
+    try {
+      const nextCoordinates = await getBrowserCoordinates();
+      setCoordinates(nextCoordinates);
+    } catch (error) {
+      setCoordinates(null);
+      setLocationError(geolocationErrorMessage(error));
+      if (isGeolocationPermissionDenied(error)) {
+        setLocationLaterMessage("La localisation pourra être ajoutée plus tard.");
+      }
+    } finally {
+      setIsLocating(false);
     }
   }
 
@@ -293,6 +326,34 @@ export default function ArtisanOnboardingPage() {
             />
             Je suis disponible
           </label>
+
+          <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
+            <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Localisation</h2>
+            <p className="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">
+              Indiquez votre position pour permettre aux clients de trouver les artisans proches.
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                void handleUseLocation();
+              }}
+              disabled={isCompleted || isLocating}
+              className="mt-3 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            >
+              {isLocating ? "Récupération…" : "Utiliser ma position"}
+            </button>
+            {coordinates ? (
+              <p className="mt-3 text-sm font-normal text-zinc-800 dark:text-zinc-200">
+                Position : {formatCoordinates(coordinates)}
+              </p>
+            ) : null}
+            {locationError ? (
+              <p className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-sm font-normal text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                {locationError}
+                {locationLaterMessage ? ` ${locationLaterMessage}` : ""}
+              </p>
+            ) : null}
+          </section>
 
           <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
             Métier
