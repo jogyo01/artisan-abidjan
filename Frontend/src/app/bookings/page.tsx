@@ -13,8 +13,10 @@ type BookingStatus =
   | "COMPLETED"
   | "CANCELLED";
 
+type PaymentIndication = "PENDING" | "PAID";
+
 type ClientBooking = {
-  id: string;
+  id: number;
   artisan_id: string;
   artisan_name: string;
   service_name: string;
@@ -23,6 +25,7 @@ type ClientBooking = {
   description: string;
   status: BookingStatus;
   created_at: string;
+  paymentStatus: PaymentIndication | null;
 };
 
 const STATUS_LABELS: Record<BookingStatus, string> = {
@@ -36,6 +39,23 @@ const STATUS_LABELS: Record<BookingStatus, string> = {
 
 function isBookingStatus(value: string): value is BookingStatus {
   return value in STATUS_LABELS;
+}
+
+function parseBookingId(value: unknown): number | null {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
+    return value;
+  }
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed) && parsed > 0) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function isPaymentIndication(value: string): value is PaymentIndication {
+  return value === "PENDING" || value === "PAID";
 }
 
 function formatDateTime(isoDate: string): string {
@@ -146,9 +166,45 @@ export default function ClientBookingsPage() {
         return;
       }
 
+      const bookingIds = ownRows.flatMap((row) => {
+        const id = parseBookingId(row.id);
+        return id === null ? [] : [id];
+      });
+
+      const paymentByBookingId = new Map<number, PaymentIndication>();
+
+      if (bookingIds.length > 0) {
+        const { data: paymentRows } = await supabase
+          .from("payments")
+          .select("booking_id, status")
+          .in("booking_id", bookingIds)
+          .in("status", ["PENDING", "PAID"]);
+
+        if (cancelled) {
+          return;
+        }
+
+        for (const paymentRow of paymentRows ?? []) {
+          const paymentBookingId = parseBookingId(paymentRow.booking_id);
+          if (paymentBookingId === null || typeof paymentRow.status !== "string") {
+            continue;
+          }
+          if (!isPaymentIndication(paymentRow.status)) {
+            continue;
+          }
+
+          const current = paymentByBookingId.get(paymentBookingId);
+          if (current === "PAID") {
+            continue;
+          }
+          paymentByBookingId.set(paymentBookingId, paymentRow.status);
+        }
+      }
+
       setBookings(
         ownRows.flatMap((row) => {
-          if (typeof row.id !== "string" || typeof row.artisan_id !== "string") {
+          const id = parseBookingId(row.id);
+          if (id === null || typeof row.artisan_id !== "string") {
             return [];
           }
           if (typeof row.status !== "string" || !isBookingStatus(row.status)) {
@@ -157,7 +213,7 @@ export default function ClientBookingsPage() {
 
           return [
             {
-              id: row.id,
+              id,
               artisan_id: row.artisan_id,
               artisan_name: artisanNames.get(row.artisan_id) ?? "Artisan",
               service_name:
@@ -169,6 +225,7 @@ export default function ClientBookingsPage() {
               description: typeof row.description === "string" ? row.description : "",
               status: row.status,
               created_at: String(row.created_at ?? ""),
+              paymentStatus: paymentByBookingId.get(id) ?? null,
             } satisfies ClientBooking,
           ];
         }),
@@ -230,9 +287,21 @@ export default function ClientBookingsPage() {
                       {booking.service_name}
                     </p>
                   </div>
-                  <p className="rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-                    {STATUS_LABELS[booking.status]}
-                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
+                      {STATUS_LABELS[booking.status]}
+                    </p>
+                    {booking.paymentStatus === "PENDING" ? (
+                      <p className="rounded-full bg-amber-50 px-3 py-1 text-sm font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-200">
+                        Paiement en attente
+                      </p>
+                    ) : null}
+                    {booking.paymentStatus === "PAID" ? (
+                      <p className="rounded-full bg-emerald-50 px-3 py-1 text-sm font-medium text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+                        Paiement effectué
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
 
                 <dl className="mt-4 space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
@@ -254,12 +323,22 @@ export default function ClientBookingsPage() {
                   </div>
                 </dl>
 
-                <Link
-                  href={`/artisans/${booking.artisan_id}`}
-                  className="mt-4 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
-                >
-                  Voir la fiche artisan
-                </Link>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <Link
+                    href={`/artisans/${booking.artisan_id}`}
+                    className="inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+                  >
+                    Voir la fiche artisan
+                  </Link>
+                  {booking.status === "ACCEPTED" && !booking.paymentStatus ? (
+                    <Link
+                      href={`/bookings/${booking.id}/payment`}
+                      className="inline-flex rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    >
+                      Payer
+                    </Link>
+                  ) : null}
+                </div>
               </li>
             ))}
           </ul>
