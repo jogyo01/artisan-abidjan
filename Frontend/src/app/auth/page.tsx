@@ -2,6 +2,12 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  assignArtisanRoleIfAllowed,
+  resolvePostAuthPath,
+  toPublicAccountType,
+  type PublicAccountType,
+} from "@/lib/auth/post-auth";
 import { createClient } from "@/lib/supabase/client";
 
 type AuthMode = "login" | "signup";
@@ -37,6 +43,7 @@ export default function AuthPage() {
 
   const [mode, setMode] = useState<AuthMode>("login");
   const [fullName, setFullName] = useState("");
+  const [accountType, setAccountType] = useState<PublicAccountType>("CLIENT");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -76,12 +83,15 @@ export default function AuthPage() {
 
     try {
       if (mode === "signup") {
-        const { error } = await supabase.auth.signUp({
+        const safeAccountType = toPublicAccountType(accountType);
+
+        const { data, error } = await supabase.auth.signUp({
           email: trimmedEmail,
           password,
           options: {
             data: {
               full_name: trimmedName,
+              account_type: safeAccountType,
             },
           },
         });
@@ -91,10 +101,33 @@ export default function AuthPage() {
           return;
         }
 
+        setPassword("");
+
+        if (safeAccountType === "ARTISAN" && data.user) {
+          const roleResult = await assignArtisanRoleIfAllowed(supabase, data.user.id);
+          if (!roleResult.ok && data.session) {
+            setErrorMessage(
+              roleResult.errorMessage ?? "Impossible d'activer le compte artisan.",
+            );
+            return;
+          }
+
+          if (data.session) {
+            setSuccessMessage("Inscription réussie. Redirection vers votre profil professionnel…");
+            router.replace("/artisan/onboarding");
+            router.refresh();
+            return;
+          }
+
+          setSuccessMessage(
+            "Inscription artisan réussie. Vérifiez votre email, puis connectez-vous pour compléter votre profil professionnel.",
+          );
+          return;
+        }
+
         setSuccessMessage(
           "Inscription réussie. Vérifiez votre email si une confirmation est demandée, puis connectez-vous.",
         );
-        setPassword("");
         return;
       }
 
@@ -109,7 +142,8 @@ export default function AuthPage() {
       }
 
       setSuccessMessage("Connexion réussie. Redirection en cours…");
-      router.push("/");
+      const nextPath = await resolvePostAuthPath(supabase);
+      router.push(nextPath);
       router.refresh();
     } catch {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
@@ -171,6 +205,50 @@ export default function AuthPage() {
                 placeholder="Ex. Kouadio Yao"
               />
             </label>
+          ) : null}
+
+          {!isLogin ? (
+            <fieldset className="flex flex-col gap-2">
+              <legend className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                Vous êtes
+              </legend>
+              <div className="grid grid-cols-2 gap-2">
+                <label
+                  className={`flex cursor-pointer items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium ${
+                    accountType === "CLIENT"
+                      ? "border-zinc-950 bg-zinc-950 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
+                      : "border-zinc-200 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="accountType"
+                    value="CLIENT"
+                    checked={accountType === "CLIENT"}
+                    onChange={() => setAccountType("CLIENT")}
+                    className="sr-only"
+                  />
+                  Client
+                </label>
+                <label
+                  className={`flex cursor-pointer items-center justify-center rounded-lg border px-3 py-2 text-sm font-medium ${
+                    accountType === "ARTISAN"
+                      ? "border-zinc-950 bg-zinc-950 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
+                      : "border-zinc-200 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="accountType"
+                    value="ARTISAN"
+                    checked={accountType === "ARTISAN"}
+                    onChange={() => setAccountType("ARTISAN")}
+                    className="sr-only"
+                  />
+                  Artisan
+                </label>
+              </div>
+            </fieldset>
           ) : null}
 
           <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
