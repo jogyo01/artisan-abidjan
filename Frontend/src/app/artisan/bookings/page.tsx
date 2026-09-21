@@ -36,6 +36,38 @@ function isBookingStatus(value: string): value is BookingStatus {
   return value in STATUS_LABELS;
 }
 
+const ALLOWED_TRANSITIONS = {
+  PENDING: ["ACCEPTED", "REFUSED"],
+  ACCEPTED: ["IN_PROGRESS"],
+  IN_PROGRESS: ["COMPLETED"],
+} as const;
+
+type AllowedNextStatus = "ACCEPTED" | "REFUSED" | "IN_PROGRESS" | "COMPLETED";
+type TransitionFrom = keyof typeof ALLOWED_TRANSITIONS;
+
+function requiredCurrentStatus(nextStatus: AllowedNextStatus): TransitionFrom {
+  if (nextStatus === "ACCEPTED" || nextStatus === "REFUSED") {
+    return "PENDING";
+  }
+  if (nextStatus === "IN_PROGRESS") {
+    return "ACCEPTED";
+  }
+  return "IN_PROGRESS";
+}
+
+function successLabel(nextStatus: AllowedNextStatus): string {
+  if (nextStatus === "ACCEPTED") {
+    return "Demande acceptée.";
+  }
+  if (nextStatus === "REFUSED") {
+    return "Demande refusée.";
+  }
+  if (nextStatus === "IN_PROGRESS") {
+    return "Intervention démarrée.";
+  }
+  return "Intervention marquée comme terminée.";
+}
+
 function formatDateTime(isoDate: string): string {
   const date = new Date(isoDate);
   if (Number.isNaN(date.getTime())) {
@@ -224,9 +256,22 @@ export default function ArtisanBookingsPage() {
     };
   }, [loadBookings, router, supabase]);
 
-  async function updatePendingStatus(bookingId: string, nextStatus: "ACCEPTED" | "REFUSED") {
+  async function updateStatus(
+    booking: ArtisanBooking,
+    nextStatus: AllowedNextStatus,
+  ) {
     setErrorMessage("");
     setSuccessMessage("");
+
+    const expectedCurrent = requiredCurrentStatus(nextStatus);
+
+    if (
+      booking.status !== expectedCurrent ||
+      !(ALLOWED_TRANSITIONS[expectedCurrent] as readonly AllowedNextStatus[]).includes(nextStatus)
+    ) {
+      setErrorMessage("Cette action n'est pas autorisée pour le statut actuel.");
+      return;
+    }
 
     const {
       data: { user },
@@ -238,15 +283,15 @@ export default function ArtisanBookingsPage() {
       return;
     }
 
-    setUpdatingId(bookingId);
+    setUpdatingId(booking.id);
 
     try {
       const { data, error } = await supabase
         .from("bookings")
         .update({ status: nextStatus })
-        .eq("id", bookingId)
+        .eq("id", booking.id)
         .eq("artisan_id", user.id)
-        .eq("status", "PENDING")
+        .eq("status", expectedCurrent)
         .select("id, status")
         .maybeSingle();
 
@@ -262,9 +307,7 @@ export default function ArtisanBookingsPage() {
         setBookings(result.bookings);
       }
 
-      setSuccessMessage(
-        nextStatus === "ACCEPTED" ? "Demande acceptée." : "Demande refusée.",
-      );
+      setSuccessMessage(successLabel(nextStatus));
     } catch {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
     } finally {
@@ -354,7 +397,7 @@ export default function ArtisanBookingsPage() {
                       type="button"
                       disabled={updatingId === booking.id}
                       onClick={() => {
-                        void updatePendingStatus(booking.id, "ACCEPTED");
+                        void updateStatus(booking, "ACCEPTED");
                       }}
                       className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
                     >
@@ -364,11 +407,41 @@ export default function ArtisanBookingsPage() {
                       type="button"
                       disabled={updatingId === booking.id}
                       onClick={() => {
-                        void updatePendingStatus(booking.id, "REFUSED");
+                        void updateStatus(booking, "REFUSED");
                       }}
                       className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
                     >
                       Refuser
+                    </button>
+                  </div>
+                ) : null}
+
+                {booking.status === "ACCEPTED" ? (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      disabled={updatingId === booking.id}
+                      onClick={() => {
+                        void updateStatus(booking, "IN_PROGRESS");
+                      }}
+                      className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    >
+                      {updatingId === booking.id ? "Mise à jour…" : "Démarrer l'intervention"}
+                    </button>
+                  </div>
+                ) : null}
+
+                {booking.status === "IN_PROGRESS" ? (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      disabled={updatingId === booking.id}
+                      onClick={() => {
+                        void updateStatus(booking, "COMPLETED");
+                      }}
+                      className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    >
+                      {updatingId === booking.id ? "Mise à jour…" : "Marquer comme terminée"}
                     </button>
                   </div>
                 ) : null}
