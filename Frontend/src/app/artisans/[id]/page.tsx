@@ -24,6 +24,13 @@ type ArtisanService = {
   price_type: PriceType;
 };
 
+type PublicReview = {
+  id: string;
+  rating: number;
+  comment: string | null;
+  created_at: string;
+};
+
 function isPriceType(value: string): value is PriceType {
   return value === "FIXED" || value === "STARTING_FROM" || value === "ON_QUOTE";
 }
@@ -48,6 +55,29 @@ function formatServicePrice(service: ArtisanService): string {
   return formatFcfa(service.price);
 }
 
+function formatReviewDate(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) {
+    return "Date inconnue";
+  }
+
+  return new Intl.DateTimeFormat("fr-FR", {
+    dateStyle: "long",
+    timeZone: "Africa/Abidjan",
+  }).format(date);
+}
+
+function formatAverageRating(reviews: PublicReview[]): string {
+  const total = reviews.reduce((sum, review) => sum + review.rating, 0);
+  const average = total / reviews.length;
+  return `${average.toFixed(1)} / 5`;
+}
+
+function starLabel(rating: number): string {
+  const rounded = Math.min(5, Math.max(1, Math.round(rating)));
+  return "★".repeat(rounded) + "☆".repeat(5 - rounded);
+}
+
 export default function ArtisanPublicProfilePage() {
   const params = useParams<{ id: string }>();
   const artisanId = typeof params.id === "string" ? params.id : "";
@@ -56,6 +86,8 @@ export default function ArtisanPublicProfilePage() {
   const [artisan, setArtisan] = useState<ArtisanDetail | null>(null);
   const [categories, setCategories] = useState<string[]>([]);
   const [services, setServices] = useState<ArtisanService[]>([]);
+  const [reviews, setReviews] = useState<PublicReview[]>([]);
+  const [reviewsError, setReviewsError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
@@ -106,15 +138,23 @@ export default function ArtisanPublicProfilePage() {
         return;
       }
 
-      const [{ data: categoryLinks }, { data: serviceRows, error: servicesError }] =
-        await Promise.all([
-          supabase.from("artisan_categories").select("category_id").eq("artisan_id", artisanId),
-          supabase
-            .from("services")
-            .select("id, name, description, price, price_type")
-            .eq("artisan_id", artisanId)
-            .order("name"),
-        ]);
+      const [
+        { data: categoryLinks },
+        { data: serviceRows, error: servicesError },
+        { data: reviewRows, error: reviewsLoadError },
+      ] = await Promise.all([
+        supabase.from("artisan_categories").select("category_id").eq("artisan_id", artisanId),
+        supabase
+          .from("services")
+          .select("id, name, description, price, price_type")
+          .eq("artisan_id", artisanId)
+          .order("name"),
+        supabase
+          .from("reviews")
+          .select("id, rating, comment, created_at")
+          .eq("artisan_id", artisanId)
+          .order("created_at", { ascending: false }),
+      ]);
 
       if (cancelled) {
         return;
@@ -145,6 +185,10 @@ export default function ArtisanPublicProfilePage() {
         setErrorMessage("Le profil a été chargé, mais les services sont indisponibles.");
       }
 
+      if (reviewsLoadError) {
+        setReviewsError("Impossible de charger les avis.");
+      }
+
       setArtisan({
         id: artisanRow.id,
         business_name: artisanRow.business_name,
@@ -171,6 +215,25 @@ export default function ArtisanPublicProfilePage() {
               price: typeof row.price === "number" ? row.price : null,
               price_type: row.price_type,
             } satisfies ArtisanService,
+          ];
+        }),
+      );
+      setReviews(
+        (reviewRows ?? []).flatMap((row) => {
+          if (typeof row.id !== "string" || typeof row.rating !== "number") {
+            return [];
+          }
+          if (row.rating < 1 || row.rating > 5) {
+            return [];
+          }
+
+          return [
+            {
+              id: row.id,
+              rating: row.rating,
+              comment: typeof row.comment === "string" && row.comment.trim() !== "" ? row.comment : null,
+              created_at: String(row.created_at ?? ""),
+            } satisfies PublicReview,
           ];
         }),
       );
@@ -292,6 +355,45 @@ export default function ArtisanPublicProfilePage() {
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold text-zinc-950 dark:text-zinc-50">Avis</h2>
+          {reviewsError ? (
+            <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
+              {reviewsError}
+            </p>
+          ) : reviews.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+              Aucun avis pour le moment.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+                {formatAverageRating(reviews)} ({reviews.length} avis)
+              </p>
+              <ul className="mt-4 flex flex-col gap-3">
+                {reviews.map((review) => (
+                  <li
+                    key={review.id}
+                    className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+                  >
+                    <p className="text-sm font-medium text-zinc-950 dark:text-zinc-50">
+                      {starLabel(review.rating)} {review.rating}/5
+                    </p>
+                    {review.comment ? (
+                      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                        {review.comment}
+                      </p>
+                    ) : null}
+                    <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                      {formatReviewDate(review.created_at)}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </section>
 
