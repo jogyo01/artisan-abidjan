@@ -3,14 +3,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-
-type NotificationItem = {
-  id: string;
-  title: string;
-  message: string;
-  is_read: boolean;
-  created_at: string;
-};
+import { mapNotificationRow, notificationKind, type NotificationItem } from "@/lib/notifications/map";
+import { AnimatedList, AnimatedListItem, EmptyState, MotionAlert, PageSkeleton, ScaleIn } from "@/components/motion";
 
 function formatDateTime(isoDate: string): string {
   const date = new Date(isoDate);
@@ -25,22 +19,40 @@ function formatDateTime(isoDate: string): string {
   }).format(date);
 }
 
+function mergeNotification(
+  current: NotificationItem[],
+  incoming: NotificationItem,
+): NotificationItem[] {
+  const existingIndex = current.findIndex((item) => item.id === incoming.id);
+  if (existingIndex === -1) {
+    return [incoming, ...current];
+  }
+
+  const next = [...current];
+  next[existingIndex] = incoming;
+  next.sort((left, right) => right.created_at.localeCompare(left.created_at));
+  return next;
+}
+
 export default function NotificationsPage() {
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
 
+  const [userId, setUserId] = useState<string | null>(null);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [isMarkingAll, setIsMarkingAll] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [liveNotice, setLiveNotice] = useState(false);
+  const [isRealtime, setIsRealtime] = useState(false);
 
   const loadNotifications = useCallback(
-    async (userId: string) => {
+    async (currentUserId: string) => {
       const { data, error } = await supabase
         .from("notifications")
         .select("id, title, message, is_read, created_at")
-        .eq("user_id", userId)
+        .eq("user_id", currentUserId)
         .order("created_at", { ascending: false });
 
       if (error) {
@@ -50,19 +62,8 @@ export default function NotificationsPage() {
       return {
         error: false,
         notifications: (data ?? []).flatMap((row) => {
-          if (typeof row.id !== "string" || typeof row.title !== "string") {
-            return [];
-          }
-
-          return [
-            {
-              id: row.id,
-              title: row.title,
-              message: typeof row.message === "string" ? row.message : "",
-              is_read: row.is_read === true,
-              created_at: String(row.created_at ?? ""),
-            } satisfies NotificationItem,
-          ];
+          const mapped = mapNotificationRow(row as Record<string, unknown>);
+          return mapped ? [mapped] : [];
         }),
       };
     },
@@ -92,6 +93,7 @@ export default function NotificationsPage() {
         return;
       }
 
+      setUserId(user.id);
       if (result.error) {
         setErrorMessage("Impossible de charger les notifications.");
         setNotifications([]);
@@ -109,6 +111,56 @@ export default function NotificationsPage() {
     };
   }, [loadNotifications, router, supabase]);
 
+  useEffect(() => {
+    if (!userId) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`notifications-list:${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const mapped = mapNotificationRow((payload.new ?? {}) as Record<string, unknown>);
+          if (!mapped) {
+            return;
+          }
+          setLiveNotice(true);
+          setNotifications((current) => mergeNotification(current, mapped));
+        },
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const mapped = mapNotificationRow((payload.new ?? {}) as Record<string, unknown>);
+          if (!mapped) {
+            return;
+          }
+          setNotifications((current) => mergeNotification(current, mapped));
+        },
+      )
+      .subscribe((status) => {
+        setIsRealtime(status === "SUBSCRIBED");
+      });
+
+    return () => {
+      setIsRealtime(false);
+      void supabase.removeChannel(channel);
+    };
+  }, [supabase, userId]);
+
   async function markAsRead(notificationId: string) {
     setErrorMessage("");
 
@@ -123,6 +175,9 @@ export default function NotificationsPage() {
     }
 
     setUpdatingId(notificationId);
+    setNotifications((current) =>
+      current.map((item) => (item.id === notificationId ? { ...item, is_read: true } : item)),
+    );
 
     try {
       const { error } = await supabase
@@ -134,14 +189,10 @@ export default function NotificationsPage() {
 
       if (error) {
         setErrorMessage("Impossible de marquer cette notification comme lue.");
-        return;
-      }
-
-      const result = await loadNotifications(user.id);
-      if (result.error) {
-        setErrorMessage("La notification a été mise à jour, mais la liste n'a pas pu être rechargée.");
-      } else {
-        setNotifications(result.notifications);
+        const result = await loadNotifications(user.id);
+        if (!result.error) {
+          setNotifications(result.notifications);
+        }
       }
     } catch {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
@@ -164,6 +215,8 @@ export default function NotificationsPage() {
     }
 
     setIsMarkingAll(true);
+    setNotifications((current) => current.map((item) => ({ ...item, is_read: true })));
+    setLiveNotice(false);
 
     try {
       const { error } = await supabase
@@ -174,14 +227,10 @@ export default function NotificationsPage() {
 
       if (error) {
         setErrorMessage("Impossible de tout marquer comme lu.");
-        return;
-      }
-
-      const result = await loadNotifications(user.id);
-      if (result.error) {
-        setErrorMessage("Les notifications ont été mises à jour, mais la liste n'a pas pu être rechargée.");
-      } else {
-        setNotifications(result.notifications);
+        const result = await loadNotifications(user.id);
+        if (!result.error) {
+          setNotifications(result.notifications);
+        }
       }
     } catch {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
@@ -194,22 +243,27 @@ export default function NotificationsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement des notifications…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement des notifications…" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-full flex-1 justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-2xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="aa-page">
+      <main className="w-full max-w-2xl aa-card p-6 sm:p-8">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+            <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
               Notifications
             </h1>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-              Consultez les alertes liées à votre compte.
+            <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
+              Nouvelles demandes, changements de statut, messages, devis et paiements.
+            </p>
+            <p className="mt-1 text-xs font-medium text-[var(--aa-ink-soft)]">
+              {isRealtime
+                ? "Notifications en temps réel"
+                : "Les notifications se mettent à jour lors de vos actions."}
             </p>
           </div>
           {unreadCount > 0 ? (
@@ -219,56 +273,66 @@ export default function NotificationsPage() {
                 void markAllAsRead();
               }}
               disabled={isMarkingAll}
-              className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              className="aa-btn aa-btn-ghost"
             >
               {isMarkingAll ? "Mise à jour…" : "Tout marquer comme lu"}
             </button>
           ) : null}
         </div>
 
-        {errorMessage ? (
-          <p className="mt-6 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            {errorMessage}
+        <ScaleIn show={Boolean(liveNotice)} className="mt-4">
+          <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-200">
+            Nouvelle notification
           </p>
+        </ScaleIn>
+
+        {errorMessage ? (
+          <MotionAlert tone="error" message={errorMessage} className="mt-6" />
         ) : null}
 
         {!errorMessage && notifications.length === 0 ? (
-          <p className="mt-8 text-sm text-zinc-600 dark:text-zinc-400">
-            Vous n&apos;avez aucune notification.
-          </p>
+          <EmptyState className="mt-8" title="Aucune notification">
+            <p className="text-sm">
+              Les demandes, messages, devis et paiements y apparaîtront.
+            </p>
+          </EmptyState>
         ) : null}
 
         {notifications.length > 0 ? (
-          <ul className="mt-8 flex flex-col gap-3">
-            {notifications.map((notification) => (
-              <li
+          <AnimatedList className="mt-8 flex flex-col gap-3">
+            {notifications.map((notification, index) => (
+              <AnimatedListItem
                 key={notification.id}
-                className={`rounded-xl border p-4 ${
+                index={index}
+                className={`aa-card p-4 transition-[background-color,border-color] duration-200 ${
                   notification.is_read
-                    ? "border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950"
-                    : "border-zinc-300 bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-900"
+                    ? ""
+                    : "border-l-4 border-[var(--aa-terracotta)]"
                 }`}
               >
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="font-semibold text-zinc-950 dark:text-zinc-50">
+                      <h2 className="font-semibold text-[var(--aa-ink)]">
                         {notification.title}
                       </h2>
+                      <span className="aa-chip bg-[color-mix(in_srgb,var(--aa-ink)_8%,transparent)] text-[var(--aa-ink)]">
+                        {notificationKind(notification.title, notification.message)}
+                      </span>
                       <span
-                        className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                        className={`aa-chip ${
                           notification.is_read
-                            ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400"
-                            : "bg-zinc-950 text-white dark:bg-zinc-50 dark:text-zinc-950"
+                            ? "bg-[color-mix(in_srgb,var(--aa-ink)_8%,transparent)] text-[var(--aa-ink-soft)]"
+                            : "bg-[var(--aa-terracotta)] text-white"
                         }`}
                       >
                         {notification.is_read ? "Lue" : "Non lue"}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+                    <p className="mt-2 text-sm text-[var(--aa-ink)]">
                       {notification.message}
                     </p>
-                    <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
+                    <p className="mt-2 text-xs text-[var(--aa-ink-soft)]">
                       {formatDateTime(notification.created_at)}
                     </p>
                   </div>
@@ -279,15 +343,15 @@ export default function NotificationsPage() {
                       onClick={() => {
                         void markAsRead(notification.id);
                       }}
-                      className="shrink-0 rounded-lg bg-zinc-950 px-3 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                      className="aa-btn aa-btn-primary shrink-0"
                     >
                       {updatingId === notification.id ? "Mise à jour…" : "Marquer comme lue"}
                     </button>
                   )}
                 </div>
-              </li>
+              </AnimatedListItem>
             ))}
-          </ul>
+          </AnimatedList>
         ) : null}
       </main>
     </div>

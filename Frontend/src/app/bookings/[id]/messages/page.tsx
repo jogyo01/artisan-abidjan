@@ -1,25 +1,21 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { bookingIdToString } from "@/lib/bookings/artisan";
+import { mapMessageRow, mergeMessageById, type ChatMessage } from "@/lib/messages/map";
+import { m } from "motion/react";
+import { EmptyState, MotionAlert, PageSkeleton, SlideUp } from "@/components/motion";
 import { createClient } from "@/lib/supabase/client";
 
-type BookingParticipants = {
+type BookingConversation = {
   id: string;
   client_id: string;
   artisan_id: string;
 };
 
-type ChatMessage = {
-  id: string;
-  sender_id: string;
-  content: string;
-  created_at: string;
-};
-
-const inputClassName =
-  "w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
+const inputClassName = "aa-input";
 
 function formatDateTime(isoDate: string): string {
   const date = new Date(isoDate);
@@ -54,13 +50,17 @@ export default function BookingMessagesPage() {
   const supabase = useMemo(() => createClient(), []);
 
   const [userId, setUserId] = useState<string | null>(null);
-  const [booking, setBooking] = useState<BookingParticipants | null>(null);
+  const [booking, setBooking] = useState<BookingConversation | null>(null);
+  const [otherName, setOtherName] = useState("Participant");
+  const [serviceName, setServiceName] = useState("Service");
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [content, setContent] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
+  const [isRealtime, setIsRealtime] = useState(false);
   const [notAllowed, setNotAllowed] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const listEndRef = useRef<HTMLDivElement | null>(null);
 
   const loadMessages = useCallback(
     async (currentBookingId: string) => {
@@ -77,21 +77,8 @@ export default function BookingMessagesPage() {
       return {
         error: false,
         messages: (data ?? []).flatMap((row) => {
-          if (typeof row.id !== "string" || typeof row.sender_id !== "string") {
-            return [];
-          }
-          if (typeof row.content !== "string") {
-            return [];
-          }
-
-          return [
-            {
-              id: row.id,
-              sender_id: row.sender_id,
-              content: row.content,
-              created_at: String(row.created_at ?? ""),
-            } satisfies ChatMessage,
-          ];
+          const mapped = mapMessageRow(row as Record<string, unknown>);
+          return mapped ? [mapped] : [];
         }),
       };
     },
@@ -127,7 +114,7 @@ export default function BookingMessagesPage() {
 
       const { data: bookingRow, error: bookingError } = await supabase
         .from("bookings")
-        .select("id, client_id, artisan_id")
+        .select("id, client_id, artisan_id, service_id")
         .eq("id", bookingId)
         .maybeSingle();
 
@@ -141,9 +128,10 @@ export default function BookingMessagesPage() {
         return;
       }
 
+      const parsedBookingId = bookingIdToString(bookingRow?.id);
       if (
         !bookingRow ||
-        typeof bookingRow.id !== "string" ||
+        !parsedBookingId ||
         typeof bookingRow.client_id !== "string" ||
         typeof bookingRow.artisan_id !== "string" ||
         (bookingRow.client_id !== user.id && bookingRow.artisan_id !== user.id)
@@ -153,7 +141,24 @@ export default function BookingMessagesPage() {
         return;
       }
 
-      const result = await loadMessages(bookingRow.id);
+      const otherId = bookingRow.client_id === user.id ? bookingRow.artisan_id : bookingRow.client_id;
+      const isArtisanViewer = bookingRow.artisan_id === user.id;
+      const serviceId = bookingIdToString(bookingRow.service_id);
+
+      const numericBookingId = Number(parsedBookingId);
+      const [result, artisanResult, clientNameResult, serviceResult] = await Promise.all([
+        loadMessages(parsedBookingId),
+        isArtisanViewer
+          ? Promise.resolve({ data: null })
+          : supabase.from("artisans").select("business_name").eq("id", otherId).maybeSingle(),
+        isArtisanViewer && Number.isSafeInteger(numericBookingId)
+          ? supabase.rpc("booking_client_display_name", { p_booking_id: numericBookingId })
+          : Promise.resolve({ data: null }),
+        serviceId
+          ? supabase.from("services").select("name").eq("id", serviceId).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ]);
+
       if (cancelled) {
         return;
       }
@@ -162,12 +167,33 @@ export default function BookingMessagesPage() {
         setErrorMessage("Impossible de charger les messages.");
       }
 
+      let resolvedOtherName = "Participant";
+      if (isArtisanViewer) {
+        const fullName = clientNameResult.data;
+        resolvedOtherName =
+          typeof fullName === "string" && fullName.trim() !== "" ? fullName : "Client";
+      } else {
+        const businessName =
+          artisanResult.data && "business_name" in artisanResult.data
+            ? artisanResult.data.business_name
+            : null;
+        resolvedOtherName =
+          typeof businessName === "string" && businessName.trim() !== "" ? businessName : "Artisan";
+      }
+
+      const serviceLabel =
+        serviceResult.data && "name" in serviceResult.data ? serviceResult.data.name : null;
+
       setUserId(user.id);
       setBooking({
-        id: bookingRow.id,
+        id: parsedBookingId,
         client_id: bookingRow.client_id,
         artisan_id: bookingRow.artisan_id,
       });
+      setOtherName(resolvedOtherName);
+      setServiceName(
+        typeof serviceLabel === "string" && serviceLabel.trim() !== "" ? serviceLabel : "Service",
+      );
       setMessages(result.messages);
       setIsLoading(false);
     }
@@ -178,6 +204,43 @@ export default function BookingMessagesPage() {
       cancelled = true;
     };
   }, [bookingId, loadMessages, router, supabase]);
+
+  useEffect(() => {
+    if (!booking || !userId) {
+      return;
+    }
+
+    const channel = supabase
+      .channel(`messages:booking:${booking.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "messages",
+          filter: `booking_id=eq.${booking.id}`,
+        },
+        (payload) => {
+          const mapped = mapMessageRow((payload.new ?? {}) as Record<string, unknown>);
+          if (!mapped) {
+            return;
+          }
+          setMessages((current) => mergeMessageById(current, mapped));
+        },
+      )
+      .subscribe((status) => {
+        setIsRealtime(status === "SUBSCRIBED");
+      });
+
+    return () => {
+      setIsRealtime(false);
+      void supabase.removeChannel(channel);
+    };
+  }, [booking, supabase, userId]);
+
+  useEffect(() => {
+    listEndRef.current?.scrollIntoView({ block: "end" });
+  }, [messages]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -209,12 +272,16 @@ export default function BookingMessagesPage() {
     setIsSending(true);
 
     try {
-      const { error } = await supabase.from("messages").insert({
-        booking_id: booking.id,
-        sender_id: user.id,
-        receiver_id: receiverId,
-        content: trimmedContent,
-      });
+      const { data, error } = await supabase
+        .from("messages")
+        .insert({
+          booking_id: booking.id,
+          sender_id: user.id,
+          receiver_id: receiverId,
+          content: trimmedContent,
+        })
+        .select("id, sender_id, content, created_at")
+        .maybeSingle();
 
       if (error) {
         setErrorMessage(messageErrorFromSupabase(error.message));
@@ -222,6 +289,13 @@ export default function BookingMessagesPage() {
       }
 
       setContent("");
+
+      const mapped = data ? mapMessageRow(data as Record<string, unknown>) : null;
+      if (mapped) {
+        setMessages((current) => mergeMessageById(current, mapped));
+        return;
+      }
+
       const result = await loadMessages(booking.id);
       if (result.error) {
         setErrorMessage("Le message a été envoyé, mais la conversation n'a pas pu être actualisée.");
@@ -240,25 +314,25 @@ export default function BookingMessagesPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement de la conversation…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement de la conversation…" />
       </div>
     );
   }
 
   if (notAllowed || !booking || !userId) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+      <div className="aa-page aa-page-center">
+        <main className="w-full max-w-lg aa-card p-6 text-center sm:p-8">
+          <h1 className="text-xl font-semibold text-[var(--aa-ink)]">
             Conversation introuvable
           </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-            Cette réservation n&apos;existe pas ou vous n&apos;y avez pas accès.
+          <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
+            Cette demande n&apos;existe pas ou vous n&apos;y avez pas accès.
           </p>
           <Link
             href="/bookings"
-            className="mt-6 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            className="aa-btn aa-btn-ghost mt-6"
           >
             Retour au suivi
           </Link>
@@ -268,79 +342,99 @@ export default function BookingMessagesPage() {
   }
 
   return (
-    <div className="flex min-h-full flex-1 justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="flex w-full max-w-2xl flex-col rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="aa-page">
+      <main className="flex w-full max-w-2xl flex-col aa-card p-4 sm:p-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-            Messages
-          </h1>
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
+              Conversation
+            </h1>
+            <p className="mt-1 text-sm text-[var(--aa-ink-soft)]">
+              {otherName} · {serviceName} · demande {booking.id}
+            </p>
+            <p className="mt-1 text-xs font-medium text-[var(--aa-ink-soft)]">
+              {isRealtime
+                ? "Messages en temps réel"
+                : "Mode classique : les messages s'affichent à l'envoi."}
+            </p>
+          </div>
           <Link
             href={backHref}
-            className="inline-flex items-center justify-center rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            className="aa-btn aa-btn-ghost"
           >
             Retour au suivi
           </Link>
         </div>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Conversation liée à votre demande d&apos;intervention.
-        </p>
 
-        {errorMessage ? (
-          <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            {errorMessage}
-          </p>
-        ) : null}
+        {errorMessage ? <MotionAlert tone="error" message={errorMessage} className="mt-4" /> : null}
 
-        <section className="mt-6 flex min-h-72 flex-col gap-3 rounded-xl bg-zinc-50 p-4 dark:bg-zinc-900">
+        <section className="mt-6 flex min-h-80 flex-1 flex-col gap-3 overflow-y-auto aa-inset">
           {messages.length === 0 ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
-              Aucun message pour le moment.
-            </p>
+            <EmptyState title="Aucun message pour le moment">
+              <p className="text-sm">Écrivez le premier message ci-dessous.</p>
+            </EmptyState>
           ) : (
-            messages.map((message) => {
+            messages.map((message, index) => {
               const isSent = message.sender_id === userId;
+              const recent = index >= messages.length - 6;
+              const previous = index > 0 ? messages[index - 1] : null;
+              const grouped = previous?.sender_id === message.sender_id;
               return (
-                <article
+                <m.article
                   key={message.id}
-                  className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${
+                  initial={recent ? { opacity: 0, y: grouped ? 4 : 8 } : false}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                  className={`max-w-[85%] rounded-2xl px-3 py-2 text-sm ${
+                    grouped ? "mt-1" : ""
+                  } ${
                     isSent
-                      ? "self-end bg-zinc-950 text-white dark:bg-zinc-50 dark:text-zinc-950"
-                      : "self-start border border-zinc-200 bg-white text-zinc-900 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-50"
+                      ? "self-end bg-[var(--aa-terracotta)] text-white"
+                      : "self-start border border-[color-mix(in_srgb,var(--aa-ink)_10%,transparent)] bg-[var(--aa-card)] text-[var(--aa-ink)]"
                   }`}
                 >
-                  <p className="whitespace-pre-wrap">{message.content}</p>
+                  {grouped ? null : (
+                    <p className="text-xs font-medium opacity-70">{isSent ? "Vous" : otherName}</p>
+                  )}
+                  <p className={grouped ? "whitespace-pre-wrap" : "mt-1 whitespace-pre-wrap"}>{message.content}</p>
                   <p
                     className={`mt-1 text-xs ${
-                      isSent ? "text-zinc-300 dark:text-zinc-500" : "text-zinc-500 dark:text-zinc-400"
+                      isSent ? "text-white/80" : "text-[var(--aa-ink-soft)]"
                     }`}
                   >
-                    {isSent ? "Envoyé" : "Reçu"} · {formatDateTime(message.created_at)}
+                    {formatDateTime(message.created_at)}
                   </p>
-                </article>
+                </m.article>
               );
             })
           )}
+          <div ref={listEndRef} />
         </section>
 
-        <form className="mt-4 flex flex-col gap-3" onSubmit={handleSubmit}>
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+        <SlideUp>
+        <form className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end" onSubmit={handleSubmit}>
+          <label className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
             Votre message
             <textarea
               name="content"
               value={content}
               onChange={(event) => setContent(event.target.value)}
-              className={`${inputClassName} min-h-24`}
+              className={`${inputClassName} min-h-20`}
               placeholder="Écrire un message"
+              disabled={isSending}
             />
           </label>
           <button
             type="submit"
-            disabled={isSending}
-            className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            disabled={isSending || content.trim() === ""}
+            className={`aa-btn aa-btn-primary min-h-11 disabled:cursor-not-allowed disabled:opacity-60 sm:mb-0.5 ${
+              isSending ? "aa-btn-loading" : ""
+            }`}
           >
             {isSending ? "Envoi…" : "Envoyer"}
           </button>
         </form>
+        </SlideUp>
       </main>
     </div>
   );

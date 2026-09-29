@@ -3,13 +3,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { AdminSectionNav } from "@/components/admin/AdminSectionNav";
+import { paginate } from "@/lib/admin/pagination";
+import { requireAdminSession } from "@/lib/admin/session";
+import { PageSkeleton } from "@/components/motion";
 import { createClient } from "@/lib/supabase/client";
+import { mapCategoryRow, categoryIdToString } from "@/lib/artisan/categories";
 
 type VerificationFilter = "all" | "pending" | "verified";
 
 type AdminArtisanListItem = {
   id: string;
   business_name: string;
+  profile_name: string | null;
   city: string | null;
   address: string | null;
   phone: string | null;
@@ -30,6 +36,7 @@ export default function AdminArtisansPage() {
   const [artisans, setArtisans] = useState<AdminArtisanListItem[]>([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<VerificationFilter>("all");
+  const [page, setPage] = useState(1);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -47,7 +54,7 @@ export default function AdminArtisansPage() {
         .from("artisans")
         .select("id, business_name, description, address, city, phone, is_verified, is_available")
         .order("business_name"),
-      supabase.from("profiles").select("id, phone"),
+      supabase.from("profiles").select("id, phone, full_name"),
       supabase.from("artisan_categories").select("artisan_id, category_id"),
       supabase.from("categories").select("id, name"),
       supabase.from("services").select("id, artisan_id"),
@@ -61,17 +68,22 @@ export default function AdminArtisansPage() {
 
     const categoryNames = new Map<string, string>();
     for (const row of categoriesResult.data ?? []) {
-      if (typeof row.id === "string" && typeof row.name === "string") {
-        categoryNames.set(row.id, row.name);
+      const category = mapCategoryRow(row);
+      if (category) {
+        categoryNames.set(category.id, category.name);
       }
     }
 
     const categoriesByArtisan = new Map<string, string[]>();
     for (const row of linksResult.data ?? []) {
-      if (typeof row.artisan_id !== "string" || typeof row.category_id !== "string") {
+      if (typeof row.artisan_id !== "string") {
         continue;
       }
-      const name = categoryNames.get(row.category_id);
+      const categoryId = categoryIdToString(row.category_id);
+      if (!categoryId) {
+        continue;
+      }
+      const name = categoryNames.get(categoryId);
       if (!name) {
         continue;
       }
@@ -81,9 +93,16 @@ export default function AdminArtisansPage() {
     }
 
     const profilePhone = new Map<string, string>();
+    const profileNames = new Map<string, string>();
     for (const row of profilesResult.data ?? []) {
-      if (typeof row.id === "string" && typeof row.phone === "string" && row.phone.trim() !== "") {
+      if (typeof row.id !== "string") {
+        continue;
+      }
+      if (typeof row.phone === "string" && row.phone.trim() !== "") {
         profilePhone.set(row.id, row.phone);
+      }
+      if (typeof row.full_name === "string" && row.full_name.trim() !== "") {
+        profileNames.set(row.id, row.full_name);
       }
     }
 
@@ -128,6 +147,7 @@ export default function AdminArtisansPage() {
           {
             id: row.id,
             business_name: row.business_name,
+            profile_name: profileNames.get(row.id) ?? null,
             city: typeof row.city === "string" ? row.city : null,
             address: typeof row.address === "string" ? row.address : null,
             phone: phoneFromArtisan ?? profilePhone.get(row.id) ?? null,
@@ -149,31 +169,15 @@ export default function AdminArtisansPage() {
     let cancelled = false;
 
     async function bootstrap() {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
+      const session = await requireAdminSession(supabase);
       if (cancelled) {
         return;
       }
-
-      if (userError || !user) {
+      if (session.kind === "unauthenticated") {
         router.replace("/auth");
         return;
       }
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (cancelled) {
-        return;
-      }
-
-      if (profile?.role !== "ADMIN") {
+      if (session.kind === "forbidden") {
         router.replace("/");
         return;
       }
@@ -216,47 +220,54 @@ export default function AdminArtisansPage() {
 
       return (
         artisan.business_name.toLowerCase().includes(query) ||
+        (artisan.profile_name ?? "").toLowerCase().includes(query) ||
         (artisan.phone ?? "").toLowerCase().includes(query) ||
         (artisan.city ?? "").toLowerCase().includes(query)
       );
     });
   }, [artisans, filter, search]);
 
+  const { pageItems, pageCount, page: safePage } = paginate(visibleArtisans, page);
+
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement des artisans…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement des artisans…" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-full flex-1 justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-5xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
+    <div className="aa-page">
+      <main className="w-full max-w-5xl aa-card p-6 sm:p-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+            <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
               Gestion des artisans
             </h1>
-            <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+            <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
               Tous les artisans, vérifiés ou en attente.
             </p>
           </div>
           <Link
             href="/admin"
-            className="inline-flex items-center justify-center rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            className="aa-btn aa-btn-ghost"
           >
             Retour au tableau de bord
           </Link>
         </div>
+        <AdminSectionNav current="/admin/artisans" />
 
         <div className="mt-6 flex flex-col gap-3 lg:flex-row">
           <input
             type="search"
             value={search}
-            onChange={(event) => setSearch(event.target.value)}
+            onChange={(event) => {
+              setSearch(event.target.value);
+              setPage(1);
+            }}
             placeholder="Rechercher par nom, téléphone ou ville"
-            className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+            className="aa-input"
           />
           <div className="flex flex-wrap gap-2">
             {(
@@ -269,12 +280,11 @@ export default function AdminArtisansPage() {
               <button
                 key={value}
                 type="button"
-                onClick={() => setFilter(value)}
-                className={`rounded-lg px-3 py-2 text-sm font-medium ${
-                  filter === value
-                    ? "bg-zinc-950 text-white dark:bg-zinc-50 dark:text-zinc-950"
-                    : "border border-zinc-200 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
-                }`}
+                onClick={() => {
+                  setFilter(value);
+                  setPage(1);
+                }}
+                className={`aa-filter ${filter === value ? "aa-filter-active" : ""}`}
               >
                 {label}
               </button>
@@ -289,47 +299,54 @@ export default function AdminArtisansPage() {
         ) : null}
 
         {!errorMessage && visibleArtisans.length === 0 ? (
-          <p className="mt-8 text-sm text-zinc-600 dark:text-zinc-400">
-            Aucun artisan ne correspond à votre recherche.
+          <p className="mt-8 text-sm text-[var(--aa-ink-soft)]">
+            {artisans.length === 0
+              ? "Aucun artisan n'est encore inscrit."
+              : "Aucun artisan ne correspond à votre recherche ou au filtre."}
           </p>
         ) : null}
 
         {visibleArtisans.length > 0 ? (
           <ul className="mt-8 flex flex-col gap-4">
-            {visibleArtisans.map((artisan) => (
+            {pageItems.map((artisan) => (
               <li
                 key={artisan.id}
-                className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
+                className="aa-card p-4"
               >
                 <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-lg font-semibold text-zinc-950 dark:text-zinc-50">
+                      <h2 className="text-lg font-semibold text-[var(--aa-ink)]">
                         {artisan.business_name}
                       </h2>
-                      <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300">
+                      <span className="aa-chip bg-[color-mix(in_srgb,var(--aa-ink)_8%,transparent)] text-[var(--aa-ink)]">
                         {artisan.is_verified ? "Vérifié" : "En attente"}
                       </span>
                     </div>
-                    <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+                    {artisan.profile_name ? (
+                      <p className="mt-1 text-sm text-[var(--aa-ink)]">
+                        {artisan.profile_name}
+                      </p>
+                    ) : null}
+                    <p className="mt-2 text-sm text-[var(--aa-ink)]">
                       {artisan.city || "Ville non renseignée"} · {artisan.address || "Adresse non renseignée"}
                     </p>
-                    <p className="mt-1 text-sm text-zinc-700 dark:text-zinc-300">
+                    <p className="mt-1 text-sm text-[var(--aa-ink)]">
                       Téléphone : {artisan.phone || "Non renseigné"} ·{" "}
                       {artisan.is_available ? "Disponible" : "Indisponible"}
                     </p>
                     {artisan.description ? (
-                      <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                      <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
                         {artisan.description}
                       </p>
                     ) : null}
-                    <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+                    <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
                       Métiers :{" "}
                       {artisan.categories.length > 0 ? artisan.categories.join(", ") : "Non renseigné"}
                     </p>
-                    <p className="mt-2 text-sm text-zinc-700 dark:text-zinc-300">
+                    <p className="mt-2 text-sm text-[var(--aa-ink)]">
                       {artisan.servicesCount} service{artisan.servicesCount > 1 ? "s" : ""} ·{" "}
-                      {artisan.bookingsCount} réservation{artisan.bookingsCount > 1 ? "s" : ""} ·{" "}
+                      {artisan.bookingsCount} demande{artisan.bookingsCount > 1 ? "s" : ""} ·{" "}
                       {artisan.reviewsCount} avis
                       {artisan.averageRating !== null
                         ? ` · ${artisan.averageRating.toFixed(1)} / 5`
@@ -338,7 +355,7 @@ export default function AdminArtisansPage() {
                   </div>
                   <Link
                     href={`/admin/artisans/${artisan.id}`}
-                    className="inline-flex shrink-0 items-center justify-center rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    className="aa-btn aa-btn-primary shrink-0"
                   >
                     Voir le détail
                   </Link>
@@ -346,6 +363,30 @@ export default function AdminArtisansPage() {
               </li>
             ))}
           </ul>
+        ) : null}
+
+        {pageCount > 1 ? (
+          <div className="mt-6 flex items-center justify-between gap-3">
+            <button
+              type="button"
+              disabled={safePage <= 1}
+              onClick={() => setPage(safePage - 1)}
+              className="aa-btn aa-btn-ghost"
+            >
+              Précédent
+            </button>
+            <p className="text-sm text-[var(--aa-ink-soft)]">
+              Page {safePage} / {pageCount}
+            </p>
+            <button
+              type="button"
+              disabled={safePage >= pageCount}
+              onClick={() => setPage(safePage + 1)}
+              className="aa-btn aa-btn-ghost"
+            >
+              Suivant
+            </button>
+          </div>
         ) : null}
       </main>
     </div>

@@ -2,7 +2,10 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { PageHero } from "@/components/ui/AppPage";
+import { MotionAlert, PageSkeleton } from "@/components/motion";
 import { createClient } from "@/lib/supabase/client";
+import { HERO_MEDIA } from "@/lib/motion/media";
 
 type UserRole = "CLIENT" | "ARTISAN" | "ADMIN";
 
@@ -207,15 +210,15 @@ export default function ProfilePage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement du profil…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement du profil…" />
       </div>
     );
   }
 
   if (loadError || !profile) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
+      <div className="aa-page aa-page-center">
         <p className="text-sm text-red-700 dark:text-red-300">
           {loadError || "Impossible de charger le profil."}
         </p>
@@ -224,30 +227,44 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-md rounded-2xl border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
-          Mon profil
-        </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Consultez vos informations et mettez à jour votre nom et votre téléphone.
-        </p>
+    <div className="aa-page">
+      <div className="w-full max-w-md">
+        <PageHero
+          imageSrc={HERO_MEDIA.imageSrc}
+          imageAlt={HERO_MEDIA.imageAlt}
+          kicker="Compte"
+          title="Mon profil"
+          subtitle="Consultez vos informations. Le rôle ne peut pas être modifié ici."
+        />
+      <main className="aa-card p-8">
 
-        <dl className="mt-6 space-y-3 rounded-lg bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
+        <div className="aa-inset mt-6">
+          <p className="text-lg font-semibold text-[var(--aa-ink)]">
+            {profile.full_name || "Nom non renseigné"}
+          </p>
+          <p className="mt-1 text-sm text-[var(--aa-ink-soft)]">
+            {profile.phone || "Téléphone non renseigné"}
+          </p>
+          <p className="aa-chip mt-3 bg-[color-mix(in_srgb,var(--aa-ink)_8%,transparent)] text-[var(--aa-ink)]">
+            {ROLE_LABELS[profile.role]}
+          </p>
+        </div>
+
+        <dl className="mt-6 aa-inset space-y-3 text-sm">
           <div>
-            <dt className="font-medium text-zinc-500 dark:text-zinc-400">Rôle</dt>
-            <dd className="mt-0.5 text-zinc-950 dark:text-zinc-50">{ROLE_LABELS[profile.role]}</dd>
+            <dt className="font-medium text-[var(--aa-ink-soft)]">Rôle</dt>
+            <dd className="mt-0.5 text-[var(--aa-ink)]">{ROLE_LABELS[profile.role]}</dd>
           </div>
           <div>
-            <dt className="font-medium text-zinc-500 dark:text-zinc-400">Membre depuis</dt>
-            <dd className="mt-0.5 text-zinc-950 dark:text-zinc-50">
+            <dt className="font-medium text-[var(--aa-ink-soft)]">Membre depuis</dt>
+            <dd className="mt-0.5 text-[var(--aa-ink)]">
               {formatCreatedAt(profile.created_at)}
             </dd>
           </div>
         </dl>
 
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
             Nom complet
             <input
               type="text"
@@ -255,12 +272,12 @@ export default function ProfilePage() {
               autoComplete="name"
               value={fullName}
               onChange={(event) => setFullName(event.target.value)}
-              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className="aa-input"
               placeholder="Ex. Kouadio Yao"
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
             Téléphone
             <input
               type="tel"
@@ -268,27 +285,18 @@ export default function ProfilePage() {
               autoComplete="tel"
               value={phone}
               onChange={(event) => setPhone(event.target.value)}
-              className="rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50"
+              className="aa-input"
               placeholder="Ex. 07 00 00 00 00"
             />
           </label>
 
-          {errorMessage ? (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-              {errorMessage}
-            </p>
-          ) : null}
-
-          {successMessage ? (
-            <p className="rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-              {successMessage}
-            </p>
-          ) : null}
+          {errorMessage ? <MotionAlert tone="error" message={errorMessage} /> : null}
+          {successMessage ? <MotionAlert tone="success" message={successMessage} /> : null}
 
           <button
             type="submit"
             disabled={isSaving || isSigningOut}
-            className="mt-2 rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            className="aa-btn aa-btn-primary mt-2"
           >
             {isSaving ? "Enregistrement…" : "Enregistrer"}
           </button>
@@ -299,12 +307,13 @@ export default function ProfilePage() {
               void handleSignOut();
             }}
             disabled={isSaving || isSigningOut}
-            className="rounded-lg border border-zinc-200 px-4 py-2.5 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            className="aa-btn aa-btn-ghost"
           >
             {isSigningOut ? "Déconnexion…" : "Se déconnecter"}
           </button>
         </form>
       </main>
+      </div>
     </div>
   );
 }

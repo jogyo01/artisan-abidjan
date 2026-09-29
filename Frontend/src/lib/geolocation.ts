@@ -17,7 +17,7 @@ function isGeolocationPositionError(error: unknown): error is GeolocationPositio
 export function geolocationErrorMessage(error: unknown): string {
   if (isGeolocationPositionError(error)) {
     if (error.code === error.PERMISSION_DENIED) {
-      return "Vous avez refusé l'accès à votre position.";
+      return "Vous avez refusé l'accès à votre position. La recherche classique reste disponible.";
     }
     if (error.code === error.POSITION_UNAVAILABLE) {
       return "Votre position est actuellement indisponible.";
@@ -25,6 +25,14 @@ export function geolocationErrorMessage(error: unknown): string {
     if (error.code === error.TIMEOUT) {
       return "La récupération de votre position a pris trop de temps.";
     }
+  }
+
+  if (error instanceof Error && error.message === "GEOLOCATION_UNSUPPORTED") {
+    return "Votre navigateur ne prend pas en charge la géolocalisation.";
+  }
+
+  if (error instanceof Error && error.message === "GEOLOCATION_INVALID") {
+    return "La position obtenue n'est pas valide.";
   }
 
   return "Impossible de récupérer votre position. Veuillez réessayer.";
@@ -52,6 +60,29 @@ export function formatCoordinates(coords: GeoCoordinates): string {
   });
 
   return `${format.format(coords.latitude)}, ${format.format(coords.longitude)}`;
+}
+
+export function haversineDistanceKm(from: GeoCoordinates, to: GeoCoordinates): number {
+  const earthRadiusKm = 6371;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const deltaLat = toRadians(to.latitude - from.latitude);
+  const deltaLng = toRadians(to.longitude - from.longitude);
+  const fromLat = toRadians(from.latitude);
+  const toLat = toRadians(to.latitude);
+  const haversine =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(fromLat) * Math.cos(toLat) * Math.sin(deltaLng / 2) ** 2;
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
+export function formatDistanceFromYou(distanceKm: number): string {
+  const formatted = new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 1,
+  }).format(distanceKm);
+
+  return `À environ ${formatted} km de vous`;
 }
 
 export function getBrowserCoordinates(): Promise<GeoCoordinates> {

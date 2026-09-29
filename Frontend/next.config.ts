@@ -1,7 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  transpilePackages: ["leaflet", "react-leaflet"],
+  images: {
+    qualities: [75, 80],
+  },
 };
 
 export default nextConfig;

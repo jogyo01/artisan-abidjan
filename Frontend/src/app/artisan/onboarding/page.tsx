@@ -3,8 +3,8 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { PageSkeleton, SlideUp } from "@/components/motion";
 import {
-  formatCoordinates,
   geolocationErrorMessage,
   getBrowserCoordinates,
   isGeolocationPermissionDenied,
@@ -20,8 +20,7 @@ type ArtisanRow = {
   id: string;
 };
 
-const inputClassName =
-  "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
+const inputClassName = "aa-input";
 
 export default function ArtisanOnboardingPage() {
   const router = useRouter();
@@ -101,9 +100,8 @@ export default function ArtisanOnboardingPage() {
       setCategories(categoryRows ?? []);
 
       if (artisan) {
-        setSuccessMessage(
-          "Votre profil artisan est déjà enregistré. Il doit être vérifié par l'équipe avant d'être visible.",
-        );
+        router.replace("/artisan");
+        return;
       }
 
       setIsLoading(false);
@@ -224,15 +222,15 @@ export default function ArtisanOnboardingPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement…" />
       </div>
     );
   }
 
   if (loadError) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
+      <div className="aa-page aa-page-center">
         <p className="text-sm text-red-700 dark:text-red-300">{loadError}</p>
       </div>
     );
@@ -241,18 +239,20 @@ export default function ArtisanOnboardingPage() {
   const isCompleted = Boolean(existingArtisan);
 
   return (
-    <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+    <div className="aa-page aa-page-center">
+      <main className="w-full max-w-lg aa-card p-6 sm:p-8">
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
           Profil professionnel
         </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
           Complétez vos informations artisan. La vérification sera effectuée par l&apos;équipe.
         </p>
 
+        <SlideUp>
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Nom de l&apos;entreprise ou nom professionnel
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Nom de l&apos;entreprise ou nom professionnel{" "}
+            <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <input
               type="text"
               name="businessName"
@@ -264,8 +264,8 @@ export default function ArtisanOnboardingPage() {
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Description
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Description <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <textarea
               name="description"
               value={description}
@@ -276,8 +276,8 @@ export default function ArtisanOnboardingPage() {
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Adresse
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Adresse <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <input
               type="text"
               name="address"
@@ -289,7 +289,7 @@ export default function ArtisanOnboardingPage() {
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
             Ville
             <input
               type="text"
@@ -301,8 +301,8 @@ export default function ArtisanOnboardingPage() {
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Téléphone
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Téléphone <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <input
               type="tel"
               name="phone"
@@ -315,7 +315,7 @@ export default function ArtisanOnboardingPage() {
             />
           </label>
 
-          <label className="flex items-center gap-2 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+          <label className="flex items-center gap-2 text-sm font-medium text-[var(--aa-ink)]">
             <input
               type="checkbox"
               name="isAvailable"
@@ -327,10 +327,11 @@ export default function ArtisanOnboardingPage() {
             Je suis disponible
           </label>
 
-          <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-            <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">Localisation</h2>
-            <p className="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">
-              Indiquez votre position pour permettre aux clients de trouver les artisans proches.
+          <section className="aa-card p-4">
+            <h2 className="text-sm font-semibold text-[var(--aa-ink)]">Localisation</h2>
+            <p className="mt-1 text-sm font-normal text-[var(--aa-ink-soft)]">
+              Votre position sert à permettre aux clients de trouver votre activité à proximité.
+              Elle n&apos;est jamais obligatoire.
             </p>
             <button
               type="button"
@@ -338,13 +339,13 @@ export default function ArtisanOnboardingPage() {
                 void handleUseLocation();
               }}
               disabled={isCompleted || isLocating}
-              className="mt-3 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              className="aa-btn aa-btn-ghost mt-3"
             >
               {isLocating ? "Récupération…" : "Utiliser ma position"}
             </button>
             {coordinates ? (
-              <p className="mt-3 text-sm font-normal text-zinc-800 dark:text-zinc-200">
-                Position : {formatCoordinates(coordinates)}
+              <p className="mt-3 text-sm font-normal text-[var(--aa-ink)]">
+                Position professionnelle enregistrée.
               </p>
             ) : null}
             {locationError ? (
@@ -355,8 +356,8 @@ export default function ArtisanOnboardingPage() {
             ) : null}
           </section>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Métier
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Métier <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <select
               name="categoryId"
               value={categoryId}
@@ -389,12 +390,13 @@ export default function ArtisanOnboardingPage() {
             <button
               type="submit"
               disabled={isSaving}
-              className="mt-2 rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+              className="aa-btn aa-btn-primary mt-2 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSaving ? "Enregistrement…" : "Enregistrer mon profil artisan"}
             </button>
           )}
         </form>
+        </SlideUp>
       </main>
     </div>
   );

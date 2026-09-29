@@ -4,6 +4,8 @@ import { FormEvent, Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { bookingIdToString } from "@/lib/bookings/artisan";
+import { MotionAlert, PageSkeleton, SlideUp } from "@/components/motion";
 import {
   geolocationErrorMessage,
   getBrowserCoordinates,
@@ -20,8 +22,7 @@ type ServiceOption = {
   name: string;
 };
 
-const inputClassName =
-  "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
+const inputClassName = "aa-input";
 
 function bookingErrorMessage(errorMessage: string): string {
   const normalized = errorMessage.toLowerCase();
@@ -132,10 +133,11 @@ function NewBookingForm() {
       });
       setServices(
         (serviceRows ?? []).flatMap((row) => {
-          if (typeof row.id !== "string" || typeof row.name !== "string") {
+          const id = bookingIdToString(row.id);
+          if (!id || typeof row.name !== "string") {
             return [];
           }
-          return [{ id: row.id, name: row.name }];
+          return [{ id, name: row.name }];
         }),
       );
       setNotFound(false);
@@ -256,26 +258,26 @@ function NewBookingForm() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement du formulaire…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement du formulaire…" />
       </div>
     );
   }
 
   if (notFound || !artisan) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+      <div className="aa-page aa-page-center">
+        <main className="w-full max-w-lg aa-card p-6 text-center sm:p-8">
+          <h1 className="text-xl font-semibold text-[var(--aa-ink)]">
             Artisan introuvable
           </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
             Impossible de créer une demande : l&apos;artisan est absent, non vérifié, ou l&apos;identifiant
             est manquant.
           </p>
           <Link
             href="/artisans"
-            className="mt-6 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            className="aa-btn aa-btn-ghost mt-6"
           >
             Retour à la recherche
           </Link>
@@ -286,39 +288,74 @@ function NewBookingForm() {
 
   if (isCreated) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+      <div className="aa-page aa-page-center">
+        <main className="w-full max-w-lg aa-card p-6 text-center sm:p-8">
+          <h1 className="text-xl font-semibold text-[var(--aa-ink)]">
             Demande envoyée
           </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
             Votre demande d&apos;intervention a été transmise à {artisan.business_name}. Le statut est
             « en attente ».
           </p>
-          <Link
-            href={`/artisans/${artisan.id}`}
-            className="mt-6 inline-flex rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
-          >
-            Retour à la fiche artisan
-          </Link>
+          <div className="mt-6 flex flex-col items-center gap-3">
+            <Link
+              href="/bookings"
+              className="aa-btn aa-btn-primary"
+            >
+              Voir mes demandes
+            </Link>
+            <Link
+              href={`/artisans/${artisan.id}`}
+              className="aa-back"
+            >
+              Retour à la fiche artisan
+            </Link>
+          </div>
         </main>
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-full flex-1 justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+    <div className="aa-page">
+      <main className="w-full max-w-lg aa-card p-6 sm:p-8">
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
           Demander une intervention
         </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Demande destinée à {artisan.business_name}.
+        <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
+          Demande destinée à un artisan vérifié.
         </p>
 
+        <ol className="aa-steps mt-6">
+          <li className="aa-step">
+            <p className="aa-step-n">01</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--aa-ink)]">Artisan</p>
+          </li>
+          <li className="aa-step">
+            <p className="aa-step-n">02</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--aa-ink)]">Service</p>
+          </li>
+          <li className="aa-step">
+            <p className="aa-step-n">03</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--aa-ink)]">Lieu &amp; détail</p>
+          </li>
+          <li className="aa-step">
+            <p className="aa-step-n">04</p>
+            <p className="mt-1 text-sm font-semibold text-[var(--aa-ink)]">Confirmation</p>
+          </li>
+        </ol>
+
+        <div className="aa-inset mt-6">
+          <p className="aa-kicker">Artisan sélectionné</p>
+          <p className="mt-1 text-base font-semibold text-[var(--aa-ink)]">
+            {artisan.business_name}
+          </p>
+        </div>
+
+        <SlideUp>
         <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Service
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Service <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <select
               name="serviceId"
               value={serviceId}
@@ -336,13 +373,13 @@ function NewBookingForm() {
           </label>
 
           {services.length === 0 ? (
-            <p className="text-sm text-zinc-600 dark:text-zinc-400">
+            <p className="text-sm text-[var(--aa-ink-soft)]">
               Cet artisan n&apos;a pas encore publié de service.
             </p>
           ) : null}
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Adresse d&apos;intervention
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Adresse d&apos;intervention <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <input
               type="text"
               name="address"
@@ -353,11 +390,11 @@ function NewBookingForm() {
             />
           </label>
 
-          <section className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800">
-            <h2 className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
+          <section className="rounded-xl border border-[color-mix(in_srgb,var(--aa-ink)_8%,transparent)] p-4">
+            <h2 className="text-sm font-semibold text-[var(--aa-ink)]">
               Localisation de l&apos;intervention
             </h2>
-            <p className="mt-1 text-sm font-normal text-zinc-600 dark:text-zinc-400">
+            <p className="mt-1 text-sm font-normal text-[var(--aa-ink-soft)]">
               Optionnel. L&apos;adresse texte reste obligatoire.
             </p>
             <button
@@ -366,13 +403,13 @@ function NewBookingForm() {
                 void handleUseLocation();
               }}
               disabled={isLocating}
-              className="mt-3 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+              className="aa-btn aa-btn-ghost mt-3"
             >
               {isLocating ? "Récupération…" : "Utiliser ma position"}
             </button>
             {coordinates ? (
-              <p className="mt-3 text-sm font-normal text-zinc-800 dark:text-zinc-200">
-                Position récupérée
+              <p className="mt-3 text-sm font-medium text-[var(--aa-ink)]">
+                Position de l&apos;intervention enregistrée
               </p>
             ) : null}
             {locationError ? (
@@ -382,8 +419,8 @@ function NewBookingForm() {
             ) : null}
           </section>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Description du besoin
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Description du besoin <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <textarea
               name="description"
               value={description}
@@ -393,8 +430,8 @@ function NewBookingForm() {
             />
           </label>
 
-          <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
-            Date et heure souhaitées
+          <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
+            Date et heure souhaitées <span className="font-normal text-[var(--aa-ink-soft)]">(obligatoire)</span>
             <input
               type="datetime-local"
               name="scheduledAt"
@@ -405,23 +442,22 @@ function NewBookingForm() {
           </label>
 
           {errorMessage ? (
-            <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-              {errorMessage}
-            </p>
+            <MotionAlert tone="error" message={errorMessage} />
           ) : null}
 
           <button
             type="submit"
             disabled={isSubmitting || services.length === 0}
-            className="mt-2 rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            className="aa-btn aa-btn-primary mt-2 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? "Envoi…" : "Envoyer la demande"}
           </button>
         </form>
+        </SlideUp>
 
         <Link
           href={`/artisans/${artisan.id}`}
-          className="mt-6 inline-flex text-sm font-medium text-zinc-600 transition hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
+          className="aa-back mt-6"
         >
           Retour à la fiche artisan
         </Link>
@@ -434,8 +470,8 @@ export default function NewBookingPage() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement du formulaire…</p>
+        <div className="aa-page aa-page-center">
+          <PageSkeleton label="Chargement du formulaire…" />
         </div>
       }
     >

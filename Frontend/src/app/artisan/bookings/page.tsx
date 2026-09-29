@@ -1,85 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { ArtisanBookingActions, canApplyTransition } from "@/components/artisan/ArtisanBookingActions";
+import { loadArtisanSession } from "@/lib/artisan/session";
+import {
+  BOOKING_STATUS_LABELS,
+  bookingStatusTone,
+  formatBookingDateTime,
+  successLabel,
+  type AllowedNextStatus,
+} from "@/lib/bookings/artisan";
+import { loadArtisanBookings, type ArtisanBooking } from "@/lib/bookings/load-artisan-bookings";
+import { AnimatedList, AnimatedListItem, EmptyState, MotionAlert, PageSkeleton, StatusTrack } from "@/components/motion";
+import { artisanCanCancelStatus, requestBookingCancellation } from "@/lib/bookings/cancel";
 import { createClient } from "@/lib/supabase/client";
+import { QUOTE_STATUS_LABELS } from "@/lib/payments/types";
 
-type BookingStatus =
-  | "PENDING"
-  | "ACCEPTED"
-  | "REFUSED"
-  | "IN_PROGRESS"
-  | "COMPLETED"
-  | "CANCELLED";
-
-type ArtisanBooking = {
-  id: string;
-  client_name: string;
-  service_name: string;
-  description: string;
-  address: string;
-  scheduled_at: string;
-  status: BookingStatus;
-  created_at: string;
-};
-
-const STATUS_LABELS: Record<BookingStatus, string> = {
-  PENDING: "En attente",
-  ACCEPTED: "Acceptée",
-  REFUSED: "Refusée",
-  IN_PROGRESS: "En cours",
-  COMPLETED: "Terminée",
-  CANCELLED: "Annulée",
-};
-
-function isBookingStatus(value: string): value is BookingStatus {
-  return value in STATUS_LABELS;
-}
-
-const ALLOWED_TRANSITIONS = {
-  PENDING: ["ACCEPTED", "REFUSED"],
-  ACCEPTED: ["IN_PROGRESS"],
-  IN_PROGRESS: ["COMPLETED"],
-} as const;
-
-type AllowedNextStatus = "ACCEPTED" | "REFUSED" | "IN_PROGRESS" | "COMPLETED";
-type TransitionFrom = keyof typeof ALLOWED_TRANSITIONS;
-
-function requiredCurrentStatus(nextStatus: AllowedNextStatus): TransitionFrom {
-  if (nextStatus === "ACCEPTED" || nextStatus === "REFUSED") {
-    return "PENDING";
-  }
-  if (nextStatus === "IN_PROGRESS") {
-    return "ACCEPTED";
-  }
-  return "IN_PROGRESS";
-}
-
-function successLabel(nextStatus: AllowedNextStatus): string {
-  if (nextStatus === "ACCEPTED") {
-    return "Demande acceptée.";
-  }
-  if (nextStatus === "REFUSED") {
-    return "Demande refusée.";
-  }
-  if (nextStatus === "IN_PROGRESS") {
-    return "Intervention démarrée.";
-  }
-  return "Intervention marquée comme terminée.";
-}
-
-function formatDateTime(isoDate: string): string {
-  const date = new Date(isoDate);
-  if (Number.isNaN(date.getTime())) {
-    return "Date inconnue";
-  }
-
-  return new Intl.DateTimeFormat("fr-FR", {
-    dateStyle: "long",
-    timeStyle: "short",
-    timeZone: "Africa/Abidjan",
-  }).format(date);
-}
+const SECTIONS: { key: ArtisanBooking["status"]; title: string }[] = [
+  { key: "PENDING", title: "Nouvelles demandes" },
+  { key: "ACCEPTED", title: "Acceptées" },
+  { key: "IN_PROGRESS", title: "En cours" },
+  { key: "COMPLETED", title: "Terminées" },
+  { key: "REFUSED", title: "Refusées" },
+  { key: "CANCELLED", title: "Annulées" },
+];
 
 export default function ArtisanBookingsPage() {
   const router = useRouter();
@@ -91,162 +37,38 @@ export default function ArtisanBookingsPage() {
   const [errorMessage, setErrorMessage] = useState("");
   const [successMessage, setSuccessMessage] = useState("");
 
-  const loadBookings = useCallback(
-    async (userId: string) => {
-      const { data: bookingRows, error: bookingsError } = await supabase
-        .from("bookings")
-        .select(
-          "id, client_id, artisan_id, service_id, status, address, description, scheduled_at, created_at",
-        )
-        .eq("artisan_id", userId)
-        .order("created_at", { ascending: false });
+  const refresh = useCallback(async () => {
+    const session = await loadArtisanSession(supabase);
+    if (session.kind === "unauthenticated") {
+      router.replace("/auth");
+      return;
+    }
+    if (session.kind === "forbidden") {
+      router.replace("/");
+      return;
+    }
+    if (session.kind === "needs_onboarding") {
+      router.replace("/artisan/onboarding");
+      return;
+    }
 
-      if (bookingsError) {
-        return { bookings: [] as ArtisanBooking[], error: true };
-      }
-
-      const ownRows = (bookingRows ?? []).filter((row) => row.artisan_id === userId);
-
-      const clientIds = [
-        ...new Set(
-          ownRows.flatMap((row) => (typeof row.client_id === "string" ? [row.client_id] : [])),
-        ),
-      ];
-      const serviceIds = [
-        ...new Set(
-          ownRows.flatMap((row) => (typeof row.service_id === "string" ? [row.service_id] : [])),
-        ),
-      ];
-
-      const clientNames = new Map<string, string>();
-      const serviceNames = new Map<string, string>();
-
-      if (clientIds.length > 0) {
-        const { data: profileRows } = await supabase
-          .from("profiles")
-          .select("id, full_name")
-          .in("id", clientIds);
-
-        for (const row of profileRows ?? []) {
-          if (typeof row.id === "string") {
-            clientNames.set(
-              row.id,
-              typeof row.full_name === "string" && row.full_name.trim() !== ""
-                ? row.full_name
-                : "Client",
-            );
-          }
-        }
-      }
-
-      if (serviceIds.length > 0) {
-        const { data: serviceRows } = await supabase
-          .from("services")
-          .select("id, name")
-          .in("id", serviceIds);
-
-        for (const row of serviceRows ?? []) {
-          if (typeof row.id === "string" && typeof row.name === "string") {
-            serviceNames.set(row.id, row.name);
-          }
-        }
-      }
-
-      return {
-        error: false,
-        bookings: ownRows.flatMap((row) => {
-          if (typeof row.id !== "string" || typeof row.status !== "string") {
-            return [];
-          }
-          if (!isBookingStatus(row.status)) {
-            return [];
-          }
-
-          return [
-            {
-              id: row.id,
-              client_name:
-                typeof row.client_id === "string"
-                  ? (clientNames.get(row.client_id) ?? "Client")
-                  : "Client",
-              service_name:
-                typeof row.service_id === "string"
-                  ? (serviceNames.get(row.service_id) ?? "Service")
-                  : "Service",
-              description: typeof row.description === "string" ? row.description : "",
-              address: typeof row.address === "string" ? row.address : "",
-              scheduled_at: String(row.scheduled_at ?? ""),
-              status: row.status,
-              created_at: String(row.created_at ?? ""),
-            } satisfies ArtisanBooking,
-          ];
-        }),
-      };
-    },
-    [supabase],
-  );
+    const result = await loadArtisanBookings(supabase, session.userId);
+    if (result.error) {
+      setErrorMessage("Impossible de charger les demandes. Veuillez réessayer.");
+      setBookings([]);
+    } else {
+      setBookings(result.bookings);
+    }
+  }, [router, supabase]);
 
   useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
-      const {
-        data: { user },
-        error: userError,
-      } = await supabase.auth.getUser();
-
-      if (cancelled) {
-        return;
+      await refresh();
+      if (!cancelled) {
+        setIsLoading(false);
       }
-
-      if (userError || !user) {
-        router.replace("/auth");
-        return;
-      }
-
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("role")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (cancelled) {
-        return;
-      }
-
-      if (profile?.role !== "ARTISAN") {
-        router.replace("/");
-        return;
-      }
-
-      const { data: artisan } = await supabase
-        .from("artisans")
-        .select("id")
-        .eq("id", user.id)
-        .maybeSingle();
-
-      if (cancelled) {
-        return;
-      }
-
-      if (!artisan) {
-        router.replace("/artisan/onboarding");
-        return;
-      }
-
-      const result = await loadBookings(user.id);
-      if (cancelled) {
-        return;
-      }
-
-      if (result.error) {
-        setErrorMessage("Impossible de charger les demandes. Veuillez réessayer.");
-        setBookings([]);
-      } else {
-        setBookings(result.bookings);
-      }
-
-      setIsLoading(false);
     }
 
     void bootstrap();
@@ -254,31 +76,19 @@ export default function ArtisanBookingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [loadBookings, router, supabase]);
+  }, [refresh]);
 
-  async function updateStatus(
-    booking: ArtisanBooking,
-    nextStatus: AllowedNextStatus,
-  ) {
+  async function updateStatus(booking: ArtisanBooking, nextStatus: AllowedNextStatus) {
     setErrorMessage("");
     setSuccessMessage("");
 
-    const expectedCurrent = requiredCurrentStatus(nextStatus);
-
-    if (
-      booking.status !== expectedCurrent ||
-      !(ALLOWED_TRANSITIONS[expectedCurrent] as readonly AllowedNextStatus[]).includes(nextStatus)
-    ) {
+    if (!canApplyTransition(booking.status, nextStatus)) {
       setErrorMessage("Cette action n'est pas autorisée pour le statut actuel.");
       return;
     }
 
-    const {
-      data: { user },
-      error: userError,
-    } = await supabase.auth.getUser();
-
-    if (userError || !user) {
+    const session = await loadArtisanSession(supabase);
+    if (session.kind !== "ok") {
       router.replace("/auth");
       return;
     }
@@ -290,8 +100,8 @@ export default function ArtisanBookingsPage() {
         .from("bookings")
         .update({ status: nextStatus })
         .eq("id", booking.id)
-        .eq("artisan_id", user.id)
-        .eq("status", expectedCurrent)
+        .eq("artisan_id", session.userId)
+        .eq("status", booking.status)
         .select("id, status")
         .maybeSingle();
 
@@ -300,14 +110,41 @@ export default function ArtisanBookingsPage() {
         return;
       }
 
-      const result = await loadBookings(user.id);
-      if (result.error) {
-        setErrorMessage("La demande a été mise à jour, mais la liste n'a pas pu être rechargée.");
-      } else {
-        setBookings(result.bookings);
+      await refresh();
+      setSuccessMessage(successLabel(nextStatus));
+    } catch {
+      setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  async function cancelBooking(booking: ArtisanBooking) {
+    setErrorMessage("");
+    setSuccessMessage("");
+
+    if (!artisanCanCancelStatus(booking.status)) {
+      setErrorMessage("Cette demande ne peut pas être annulée.");
+      return;
+    }
+
+    const session = await loadArtisanSession(supabase);
+    if (session.kind !== "ok") {
+      router.replace("/auth");
+      return;
+    }
+
+    setUpdatingId(booking.id);
+
+    try {
+      const result = await requestBookingCancellation(supabase, booking.id);
+      if (!result.ok) {
+        setErrorMessage(result.message);
+        return;
       }
 
-      setSuccessMessage(successLabel(nextStatus));
+      await refresh();
+      setSuccessMessage("Demande annulée.");
     } catch {
       setErrorMessage("Une erreur est survenue. Veuillez réessayer.");
     } finally {
@@ -317,138 +154,154 @@ export default function ArtisanBookingsPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement des demandes…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement des demandes…" />
       </div>
     );
   }
 
   return (
-    <div className="flex min-h-full flex-1 justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-3xl rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+    <div className="aa-page">
+      <main className="w-full max-w-3xl">
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
           Demandes reçues
         </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
-          Consultez et répondez aux demandes d&apos;intervention qui vous sont destinées.
+        <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
+          Consultez et traitez les demandes selon leur statut. L&apos;historique terminé est en lecture
+          seule.
         </p>
 
         {errorMessage ? (
-          <p className="mt-6 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            {errorMessage}
-          </p>
+          <MotionAlert tone="error" message={errorMessage} className="mt-6" />
         ) : null}
-
         {successMessage ? (
-          <p className="mt-6 rounded-lg bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
-            {successMessage}
-          </p>
+          <MotionAlert tone="success" message={successMessage} className="mt-6" />
         ) : null}
 
         {!errorMessage && bookings.length === 0 ? (
-          <p className="mt-8 text-sm text-zinc-600 dark:text-zinc-400">
-            Vous n&apos;avez encore aucune demande.
-          </p>
+          <EmptyState className="mt-8" title="Aucune demande pour le moment">
+            <p className="text-sm">
+              Les nouvelles demandes des clients apparaîtront ici.
+            </p>
+          </EmptyState>
         ) : null}
 
-        {bookings.length > 0 ? (
-          <ul className="mt-8 flex flex-col gap-4">
-            {bookings.map((booking) => (
-              <li
-                key={booking.id}
-                className="rounded-xl border border-zinc-200 p-4 dark:border-zinc-800"
-              >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 className="text-lg font-semibold text-zinc-950 dark:text-zinc-50">
-                      {booking.client_name}
-                    </h2>
-                    <p className="mt-1 text-sm text-zinc-800 dark:text-zinc-200">
-                      {booking.service_name}
-                    </p>
-                  </div>
-                  <p className="rounded-full bg-zinc-100 px-3 py-1 text-sm font-medium text-zinc-800 dark:bg-zinc-900 dark:text-zinc-200">
-                    {STATUS_LABELS[booking.status]}
-                  </p>
-                </div>
+        {bookings.length > 0
+          ? SECTIONS.map((section) => {
+          const items = bookings.filter((booking) => booking.status === section.key);
 
-                <dl className="mt-4 space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
-                  <div>
-                    <dt className="font-medium text-zinc-500 dark:text-zinc-400">Description</dt>
-                    <dd>{booking.description || "Non renseignée"}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-zinc-500 dark:text-zinc-400">Adresse</dt>
-                    <dd>{booking.address || "Non renseignée"}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-zinc-500 dark:text-zinc-400">Date souhaitée</dt>
-                    <dd>{formatDateTime(booking.scheduled_at)}</dd>
-                  </div>
-                  <div>
-                    <dt className="font-medium text-zinc-500 dark:text-zinc-400">Créée le</dt>
-                    <dd>{formatDateTime(booking.created_at)}</dd>
-                  </div>
-                </dl>
-
-                {booking.status === "PENDING" ? (
-                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-                    <button
-                      type="button"
-                      disabled={updatingId === booking.id}
-                      onClick={() => {
-                        void updateStatus(booking, "ACCEPTED");
-                      }}
-                      className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                    >
-                      {updatingId === booking.id ? "Mise à jour…" : "Accepter"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={updatingId === booking.id}
-                      onClick={() => {
-                        void updateStatus(booking, "REFUSED");
-                      }}
-                      className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
-                    >
-                      Refuser
-                    </button>
-                  </div>
-                ) : null}
-
-                {booking.status === "ACCEPTED" ? (
-                  <div className="mt-4">
-                    <button
-                      type="button"
-                      disabled={updatingId === booking.id}
-                      onClick={() => {
-                        void updateStatus(booking, "IN_PROGRESS");
-                      }}
-                      className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                    >
-                      {updatingId === booking.id ? "Mise à jour…" : "Démarrer l'intervention"}
-                    </button>
-                  </div>
-                ) : null}
-
-                {booking.status === "IN_PROGRESS" ? (
-                  <div className="mt-4">
-                    <button
-                      type="button"
-                      disabled={updatingId === booking.id}
-                      onClick={() => {
-                        void updateStatus(booking, "COMPLETED");
-                      }}
-                      className="rounded-lg bg-zinc-950 px-4 py-2 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                    >
-                      {updatingId === booking.id ? "Mise à jour…" : "Marquer comme terminée"}
-                    </button>
-                  </div>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+          return (
+            <section key={section.key} className="mt-8">
+              <h2 className="text-lg font-semibold text-[var(--aa-ink)]">{section.title}</h2>
+              {items.length === 0 ? (
+                <p className="aa-empty mt-3">Aucune demande dans cette section.</p>
+              ) : (
+              <AnimatedList className="mt-3 flex flex-col gap-4">
+                {items.map((booking, index) => (
+                  <AnimatedListItem
+                    key={booking.id}
+                    index={index}
+                    className="aa-card aa-card-hover p-4"
+                  >
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-base font-semibold text-[var(--aa-ink)]">
+                          {booking.service_name}
+                        </h3>
+                        <p className="mt-1 text-sm text-[var(--aa-ink)]">
+                          Client : {booking.client_name}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-sm font-medium ${bookingStatusTone(booking.status)}`}
+                      >
+                        {BOOKING_STATUS_LABELS[booking.status]}
+                      </span>
+                    </div>
+                    <StatusTrack status={booking.status} />
+                    <dl className="mt-4 space-y-2 text-sm text-[var(--aa-ink)]">
+                      <div>
+                        <dt className="font-medium text-[var(--aa-ink-soft)]">Description</dt>
+                        <dd>{booking.description || "Non renseignée"}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-medium text-[var(--aa-ink-soft)]">Adresse</dt>
+                        <dd>{booking.address || "Non renseignée"}</dd>
+                      </div>
+                      <div>
+                        <dt className="font-medium text-[var(--aa-ink-soft)]">Date</dt>
+                        <dd>{formatBookingDateTime(booking.scheduled_at)}</dd>
+                      </div>
+                      {booking.latitude !== null && booking.longitude !== null ? (
+                        <div>
+                          <dt className="font-medium text-[var(--aa-ink-soft)]">Localisation</dt>
+                          <dd>Coordonnées d&apos;intervention enregistrées</dd>
+                        </div>
+                      ) : null}
+                      {booking.quote ? (
+                        <div>
+                          <dt className="font-medium text-[var(--aa-ink-soft)]">Devis</dt>
+                          <dd>
+                            {QUOTE_STATUS_LABELS[booking.quote.status]} ·{" "}
+                            {new Intl.NumberFormat("fr-FR").format(booking.quote.amount)}{" "}
+                            {booking.quote.currency}
+                          </dd>
+                        </div>
+                      ) : (booking.price_type === "STARTING_FROM" || booking.price_type === "ON_QUOTE") &&
+                        booking.status === "ACCEPTED" ? (
+                        <div>
+                          <dt className="font-medium text-[var(--aa-ink-soft)]">Devis</dt>
+                          <dd>À proposer</dd>
+                        </div>
+                      ) : null}
+                      {booking.status === "COMPLETED" &&
+                      booking.paymentAmount !== null &&
+                      booking.paymentCurrency ? (
+                        <div>
+                          <dt className="font-medium text-[var(--aa-ink-soft)]">Paiement</dt>
+                          <dd>
+                            {new Intl.NumberFormat("fr-FR").format(booking.paymentAmount)}{" "}
+                            {booking.paymentCurrency}
+                          </dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <Link
+                        href={`/artisan/bookings/${booking.id}`}
+                        className="aa-btn aa-btn-ghost"
+                      >
+                        Voir le détail
+                      </Link>
+                      <Link
+                        href={`/bookings/${booking.id}/messages`}
+                        className="aa-btn aa-btn-ghost"
+                      >
+                        Messages
+                      </Link>
+                    </div>
+                    {booking.status === "COMPLETED" ||
+                    booking.status === "CANCELLED" ||
+                    booking.status === "REFUSED" ? null : (
+                      <ArtisanBookingActions
+                        booking={booking}
+                        updatingId={updatingId}
+                        onUpdate={(current, nextStatus) => {
+                          void updateStatus(current as ArtisanBooking, nextStatus);
+                        }}
+                        onCancel={(current) => {
+                          void cancelBooking(current as ArtisanBooking);
+                        }}
+                      />
+                    )}
+                  </AnimatedListItem>
+                ))}
+              </AnimatedList>
+              )}
+            </section>
+          );
+        })
+          : null}
       </main>
     </div>
   );

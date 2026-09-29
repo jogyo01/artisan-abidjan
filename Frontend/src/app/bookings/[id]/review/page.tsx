@@ -4,6 +4,9 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { bookingIdToString } from "@/lib/bookings/artisan";
+import { toCategoryWriteValue } from "@/lib/artisan/categories";
+import { MotionAlert, PageSkeleton, SlideUp } from "@/components/motion";
 
 type ReviewBooking = {
   id: string;
@@ -13,8 +16,7 @@ type ReviewBooking = {
   scheduled_at: string;
 };
 
-const inputClassName =
-  "rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm font-normal text-zinc-950 outline-none ring-zinc-400 focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-50";
+const inputClassName = "aa-input";
 
 function formatDateTime(isoDate: string): string {
   const date = new Date(isoDate);
@@ -105,12 +107,17 @@ export default function BookingReviewPage() {
         return;
       }
 
-      if (
-        !bookingRow ||
-        bookingRow.client_id !== user.id ||
-        typeof bookingRow.id !== "string" ||
-        typeof bookingRow.artisan_id !== "string"
-      ) {
+      if (!bookingRow || bookingRow.client_id !== user.id) {
+        setNotAllowed(true);
+        setIsLoading(false);
+        return;
+      }
+
+      const bookingRowId = bookingIdToString(bookingRow.id);
+      const artisanId =
+        typeof bookingRow.artisan_id === "string" ? bookingRow.artisan_id : bookingIdToString(bookingRow.artisan_id);
+
+      if (!bookingRowId || !artisanId) {
         setNotAllowed(true);
         setIsLoading(false);
         return;
@@ -122,24 +129,25 @@ export default function BookingReviewPage() {
         return;
       }
 
+      const serviceId = bookingIdToString(bookingRow.service_id);
       const [{ data: artisanRow }, { data: serviceRow }, { data: existingReview }] =
         await Promise.all([
           supabase
             .from("artisans")
             .select("id, business_name")
-            .eq("id", bookingRow.artisan_id)
+            .eq("id", artisanId)
             .maybeSingle(),
-          typeof bookingRow.service_id === "string"
+          serviceId
             ? supabase
                 .from("services")
                 .select("id, name")
-                .eq("id", bookingRow.service_id)
+                .eq("id", toCategoryWriteValue(serviceId))
                 .maybeSingle()
             : Promise.resolve({ data: null }),
           supabase
             .from("reviews")
             .select("id")
-            .eq("booking_id", bookingRow.id)
+            .eq("booking_id", toCategoryWriteValue(bookingRowId))
             .eq("client_id", user.id)
             .maybeSingle(),
         ]);
@@ -149,8 +157,8 @@ export default function BookingReviewPage() {
       }
 
       setBooking({
-        id: bookingRow.id,
-        artisan_id: bookingRow.artisan_id,
+        id: bookingRowId,
+        artisan_id: artisanId,
         artisan_name:
           typeof artisanRow?.business_name === "string"
             ? artisanRow.business_name
@@ -216,7 +224,7 @@ export default function BookingReviewPage() {
       const trimmedComment = comment.trim();
 
       const { error } = await supabase.from("reviews").insert({
-        booking_id: booking.id,
+        booking_id: toCategoryWriteValue(booking.id),
         client_id: user.id,
         artisan_id: booking.artisan_id,
         rating,
@@ -242,26 +250,26 @@ export default function BookingReviewPage() {
 
   if (isLoading) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <p className="text-sm text-zinc-600 dark:text-zinc-400">Chargement…</p>
+      <div className="aa-page aa-page-center">
+        <PageSkeleton label="Chargement…" />
       </div>
     );
   }
 
   if (notAllowed || !booking) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">
+      <div className="aa-page aa-page-center">
+        <main className="w-full max-w-lg aa-card p-6 text-center sm:p-8">
+          <h1 className="text-xl font-semibold text-[var(--aa-ink)]">
             Avis impossible
           </h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+          <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
             Cette intervention n&apos;existe pas, ne vous appartient pas, ou n&apos;est pas encore
-            terminée.
+            terminée. Un avis n&apos;est possible que pour une intervention terminée.
           </p>
           <Link
             href="/bookings"
-            className="mt-6 inline-flex rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-200 dark:hover:bg-zinc-900"
+            className="aa-btn aa-btn-ghost mt-6"
           >
             Retour à mes demandes
           </Link>
@@ -272,15 +280,15 @@ export default function BookingReviewPage() {
 
   if (isCreated) {
     return (
-      <div className="flex min-h-full flex-1 items-center justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-        <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 text-center shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-          <h1 className="text-xl font-semibold text-zinc-950 dark:text-zinc-50">Avis envoyé</h1>
-          <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+      <div className="aa-page aa-page-center">
+        <main className="w-full max-w-lg aa-card p-6 text-center sm:p-8">
+          <h1 className="text-xl font-semibold text-[var(--aa-ink)]">Avis envoyé</h1>
+          <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
             Merci. Votre avis sur {booking.artisan_name} a bien été enregistré.
           </p>
           <Link
             href="/bookings"
-            className="mt-6 inline-flex rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+            className="aa-btn aa-btn-primary mt-6"
           >
             Retour à mes demandes
           </Link>
@@ -290,27 +298,27 @@ export default function BookingReviewPage() {
   }
 
   return (
-    <div className="flex min-h-full flex-1 justify-center bg-zinc-50 px-4 py-12 dark:bg-black">
-      <main className="w-full max-w-lg rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm sm:p-8 dark:border-zinc-800 dark:bg-zinc-950">
-        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50">
+    <div className="aa-page">
+      <main className="w-full max-w-lg aa-card p-6 sm:p-8">
+        <h1 className="text-2xl font-semibold tracking-tight text-[var(--aa-ink)]">
           Laisser un avis
         </h1>
-        <p className="mt-2 text-sm text-zinc-600 dark:text-zinc-400">
+        <p className="mt-2 text-sm text-[var(--aa-ink-soft)]">
           Donnez votre avis après l&apos;intervention.
         </p>
 
-        <dl className="mt-6 space-y-3 rounded-lg bg-zinc-50 p-4 text-sm dark:bg-zinc-900">
+        <dl className="mt-6 aa-inset space-y-3 text-sm">
           <div>
-            <dt className="font-medium text-zinc-500 dark:text-zinc-400">Artisan</dt>
-            <dd className="mt-0.5 text-zinc-950 dark:text-zinc-50">{booking.artisan_name}</dd>
+            <dt className="font-medium text-[var(--aa-ink-soft)]">Artisan</dt>
+            <dd className="mt-0.5 text-[var(--aa-ink)]">{booking.artisan_name}</dd>
           </div>
           <div>
-            <dt className="font-medium text-zinc-500 dark:text-zinc-400">Service</dt>
-            <dd className="mt-0.5 text-zinc-950 dark:text-zinc-50">{booking.service_name}</dd>
+            <dt className="font-medium text-[var(--aa-ink-soft)]">Service</dt>
+            <dd className="mt-0.5 text-[var(--aa-ink)]">{booking.service_name}</dd>
           </div>
           <div>
-            <dt className="font-medium text-zinc-500 dark:text-zinc-400">Date de l&apos;intervention</dt>
-            <dd className="mt-0.5 text-zinc-950 dark:text-zinc-50">
+            <dt className="font-medium text-[var(--aa-ink-soft)]">Date de l&apos;intervention</dt>
+            <dd className="mt-0.5 text-[var(--aa-ink)]">
               {formatDateTime(booking.scheduled_at)}
             </dd>
           </div>
@@ -321,9 +329,10 @@ export default function BookingReviewPage() {
             Un avis a déjà été laissé pour cette intervention.
           </p>
         ) : (
+          <SlideUp>
           <form className="mt-6 flex flex-col gap-4" onSubmit={handleSubmit}>
             <fieldset>
-              <legend className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
+              <legend className="text-sm font-medium text-[var(--aa-ink)]">
                 Note
               </legend>
               <div className="mt-2 flex flex-wrap gap-2">
@@ -332,20 +341,21 @@ export default function BookingReviewPage() {
                     key={value}
                     type="button"
                     onClick={() => setRating(value)}
-                    className={`rounded-lg border px-3 py-2 text-sm font-medium ${
+                    className={`min-h-11 min-w-12 rounded-xl border px-3 py-3 text-base font-semibold ${
                       rating >= value
-                        ? "border-zinc-950 bg-zinc-950 text-white dark:border-zinc-50 dark:bg-zinc-50 dark:text-zinc-950"
-                        : "border-zinc-200 text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+                        ? "border-[var(--aa-terracotta)] bg-[var(--aa-terracotta)] text-[#fffaf4]"
+                        : "border-[color-mix(in_srgb,var(--aa-ink)_18%,transparent)] text-[var(--aa-ink)]"
                     }`}
                     aria-label={`${value} étoile${value > 1 ? "s" : ""}`}
+                    aria-pressed={rating === value}
                   >
-                    {value} ★
+                    {value}★
                   </button>
                 ))}
               </div>
             </fieldset>
 
-            <label className="flex flex-col gap-1.5 text-sm font-medium text-zinc-800 dark:text-zinc-200">
+            <label className="flex flex-col gap-1.5 text-sm font-medium text-[var(--aa-ink)]">
               Commentaire (facultatif)
               <textarea
                 name="comment"
@@ -356,31 +366,26 @@ export default function BookingReviewPage() {
               />
             </label>
 
-            {errorMessage ? (
-              <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-                {errorMessage}
-              </p>
-            ) : null}
+            {errorMessage ? <MotionAlert tone="error" message={errorMessage} /> : null}
 
             <button
               type="submit"
               disabled={isSubmitting}
-              className="rounded-lg bg-zinc-950 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-50 dark:text-zinc-950 dark:hover:bg-zinc-200"
+              className="aa-btn aa-btn-primary disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting ? "Envoi…" : "Publier l'avis"}
             </button>
           </form>
+          </SlideUp>
         )}
 
         {alreadyReviewed && errorMessage ? (
-          <p className="mt-4 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950/40 dark:text-red-300">
-            {errorMessage}
-          </p>
+          <MotionAlert tone="error" message={errorMessage} className="mt-4" />
         ) : null}
 
         <Link
           href="/bookings"
-          className="mt-6 inline-flex text-sm font-medium text-zinc-600 transition hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-50"
+          className="aa-back mt-6"
         >
           Retour à mes demandes
         </Link>
